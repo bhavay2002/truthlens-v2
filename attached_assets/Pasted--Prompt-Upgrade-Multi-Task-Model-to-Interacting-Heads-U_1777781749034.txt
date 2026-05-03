@@ -1,0 +1,334 @@
+# ⚙️ Prompt: Upgrade Multi-Task Model to Interacting Heads + Unified Representation (TruthLens AI)
+
+You are a senior ML systems engineer redesigning the **core architecture** of a multi-task transformer model used for misinformation detection.
+
+The current system uses:
+
+> Encoder → Independent Task Heads
+
+This must be upgraded into a **cross-task interacting architecture with a unified latent reasoning space**.
+
+---
+
+# 🔷 1. Architectural Objective
+
+Transform the model into:
+
+```
+Input Text
+   ↓
+Transformer Encoder (RoBERTa)
+   ↓
+Shared Representation (H_shared)
+   ↓
+Cross-Task Interaction Layer
+   ↓
+Task-Specific Heads (Interdependent)
+   ↓
+Latent Truth Vector (Z)
+   ↓
+Final Prediction Head (Credibility Score)
+```
+
+---
+
+# 🔷 2. Replace Independent Heads with Interacting Heads
+
+## 2.1 Cross-Task Interaction Layer (MANDATORY)
+
+Implement a **cross-stitch / gated feature sharing mechanism**.
+
+### Requirements:
+
+Let:
+
+```python id="s8j2ka"
+H_shared = encoder_output  # shape: [B, D]
+```
+
+Create task-specific intermediate representations:
+
+```python id="gk2o1v"
+H_bias = W_bias(H_shared)
+H_emotion = W_emotion(H_shared)
+H_ideology = W_ideology(H_shared)
+H_propaganda = W_propaganda(H_shared)
+H_narrative = W_narrative(H_shared)
+```
+
+---
+
+### Cross-task interaction (core upgrade):
+
+```python id="9l2xpw"
+H_bias = H_bias + α1 * H_emotion + α2 * H_ideology
+H_emotion = H_emotion + β1 * H_bias + β2 * H_narrative
+H_propaganda = H_propaganda + γ1 * H_narrative
+```
+
+### Implementation constraints:
+
+* α, β, γ = **learnable scalar or vector gates**
+* Use **sigmoid activation** for gating stability
+* Ensure **no circular gradient explosion** (use residual + normalization)
+
+---
+
+### Recommended advanced version:
+
+Use **Gated Multi-Task Attention**:
+
+```python id="3cifpx"
+H_i = H_i + softmax(Q_i K_j^T)V_j
+```
+
+👉 This allows:
+
+* Dynamic feature sharing
+* Context-aware task influence
+
+---
+
+## 🔷 2.2 Add Task Embeddings
+
+Introduce **learnable task embeddings**:
+
+```python id="zq3h8s"
+E_task ∈ R^(num_tasks × d)
+```
+
+Inject into each head:
+
+```python id="rfj0l2"
+H_bias = H_bias + E_task[bias]
+H_emotion = H_emotion + E_task[emotion]
+```
+
+---
+
+### Alternative (stronger approach):
+
+Concatenate:
+
+```python id="o2n9cl"
+H_bias = concat(H_bias, E_task[bias])
+```
+
+Then project:
+
+```python id="dy7e0m"
+H_bias = Linear(H_bias)
+```
+
+---
+
+### Objective:
+
+* Encode **task identity explicitly**
+* Allow model to learn **task relationships in embedding space**
+
+---
+
+# 🔷 3. Replace CLS-Only Representation
+
+## Problem:
+
+CLS token is insufficient for:
+
+* Long documents
+* Narrative & discourse reasoning
+
+---
+
+## Upgrade: Multi-View Representation
+
+Construct:
+
+```python id="6fpl7z"
+H_cls = CLS token
+H_mean = mean pooling over tokens
+H_attn = attention pooling
+```
+
+Combine:
+
+```python id="9l9h3r"
+H_shared = concat(H_cls, H_mean, H_attn)
+H_shared = Linear(H_shared)  # project back to D
+```
+
+---
+
+### Attention Pooling (required):
+
+```python id="7b3dzt"
+weights = softmax(W * hidden_states)
+H_attn = sum(weights * hidden_states)
+```
+
+---
+
+### Benefit:
+
+* Captures:
+
+  * Global semantics (mean)
+  * Key tokens (attention)
+  * Transformer summary (CLS)
+
+---
+
+# 🔷 4. Unified Latent Truth Representation
+
+## Replace Post-hoc Aggregation
+
+Current:
+
+```
+6 task outputs → rule-based aggregation
+```
+
+---
+
+## Upgrade:
+
+### Step 1: Collect task logits/features
+
+```python id="2y2n1p"
+Z = concat([
+  H_bias,
+  H_emotion,
+  H_ideology,
+  H_propaganda,
+  H_narrative
+])
+```
+
+---
+
+### Step 2: Fusion Layer
+
+```python id="r9xw1z"
+Z = LayerNorm(Z)
+Z = Linear(Z)
+Z = GELU(Z)
+Z = Dropout(0.1)
+```
+
+---
+
+### Step 3: Final Prediction Head
+
+```python id="qj4v8o"
+credibility_score = sigmoid(Linear(Z))
+```
+
+Optional:
+
+```python id="y1m0ev"
+risk_class = softmax(Linear(Z))
+```
+
+---
+
+## 🔷 5. Hybrid Aggregation (Recommended)
+
+Do NOT fully remove rule-based aggregation.
+
+Instead:
+
+```python id="lqj5r2"
+final_score = α * neural_score + (1 - α) * rule_score
+```
+
+Where:
+
+* α = learnable or tuned hyperparameter
+
+---
+
+# 🔷 6. Regularization + Stability (CRITICAL)
+
+## 6.1 Layer Normalization after interaction
+
+```python id="xrfu2z"
+H_i = LayerNorm(H_i)
+```
+
+---
+
+## 6.2 Dropout in interaction layer
+
+* Prevent overfitting across tasks
+
+---
+
+## 6.3 Gradient Control
+
+* Clip gradients (norm = 1.0)
+* Optional: **gradient surgery (PCGrad)** for task conflict
+
+---
+
+# 🔷 7. Output Requirements
+
+Implement:
+
+### 7.1 Model class:
+
+* `InteractingMultiTaskModel(nn.Module)`
+* Modular structure:
+
+  * encoder
+  * pooling block
+  * task embedding module
+  * interaction layer
+  * heads
+  * fusion head
+
+---
+
+### 7.2 Forward pass returns:
+
+```python id="0s5w0w"
+{
+  "task_outputs": {...},
+  "latent_vector": Z,
+  "credibility_score": score
+}
+```
+
+---
+
+### 7.3 Ensure:
+
+* Fully batch-compatible
+* Mixed precision safe (bf16)
+* Works on CPU fallback
+
+---
+
+# 🔥 Final Objective
+
+Transform the system from:
+
+> ❌ Independent classifiers sharing encoder
+
+into:
+
+> ✅ A **joint reasoning network** where:
+
+* Tasks influence each other
+* Representations are shared and aligned
+* Final prediction emerges from a unified latent space
+
+---
+
+# 🚀 Expected Impact
+
+* ↑ Multi-task accuracy (especially ideology, narrative)
+* ↓ reliance on rule-based aggregation
+* ↑ generalization across unseen misinformation patterns
+* ↑ interpretability of cross-task reasoning
+
+---
