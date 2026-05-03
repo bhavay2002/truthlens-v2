@@ -1,0 +1,326 @@
+# ⚙️ Architecture Specification — Interacting Multi-Task Model with Unified Latent Space
+
+## 1. Context
+
+The current TruthLens system uses:
+
+* Shared transformer encoder
+* Independent task heads
+* Post-hoc aggregation engine 
+
+This creates:
+
+* Weak cross-task learning
+* Redundant representations
+* Heavy reliance on rule-based scoring
+
+---
+
+## 2. Target System
+
+Transition to:
+
+> **Joint Multi-Task Reasoning Network with Interacting Heads + Learned Aggregation**
+
+---
+
+# 🧠 3. Core Architecture
+
+## 3.1 High-Level Graph
+
+```
+Input Text
+   ↓
+Transformer Encoder (RoBERTa)
+   ↓
+Multi-View Representation Block
+   ↓
+Task Projection Layer
+   ↓
+Cross-Task Interaction Layer
+   ↓
+Task Heads (Interdependent)
+   ↓
+Latent Truth Vector (Z)
+   ↓
+Neural Aggregation Head
+   ↓
+Final Outputs
+```
+
+---
+
+# 🔷 4. Representation Layer (Critical Upgrade)
+
+## 4.1 Multi-View Encoding
+
+Replace CLS-only bottleneck with:
+
+```python
+H_cls   = hidden_states[:, 0]
+H_mean  = mean(hidden_states)
+H_attn  = AttentionPooling(hidden_states)
+
+H_shared = concat(H_cls, H_mean, H_attn)
+H_shared = Linear(H_shared → D)
+```
+
+### Design Rationale:
+
+* CLS → global summary
+* Mean → distributional context
+* Attention → salient token focus
+
+👉 This directly improves:
+
+* narrative understanding
+* long-form reasoning
+* discourse modeling
+
+---
+
+# 🔷 5. Task Projection Layer
+
+Project shared representation into task subspaces:
+
+```python
+H_bias        = W_bias(H_shared)
+H_emotion     = W_emotion(H_shared)
+H_ideology    = W_ideology(H_shared)
+H_propaganda  = W_prop(H_shared)
+H_narrative   = W_narr(H_shared)
+```
+
+Each:
+
+* Linear + GELU + LayerNorm
+* Same dimensionality (D)
+
+---
+
+# 🔷 6. Cross-Task Interaction Layer (CORE INNOVATION)
+
+## 6.1 Gated Feature Exchange
+
+For each task i:
+
+```python
+H_i = H_i + Σ_j σ(G_ij) ⊙ H_j
+```
+
+Where:
+
+* G_ij = learnable gate (scalar or vector)
+* σ = sigmoid
+* ⊙ = element-wise multiplication
+
+---
+
+## 6.2 Constraints
+
+* Residual connections required
+* Apply LayerNorm post-interaction
+* Use Dropout (p=0.1)
+
+---
+
+## 6.3 Advanced Variant (Recommended)
+
+Multi-head cross-task attention:
+
+```python
+H_i = H_i + Attention(Q=H_i, K=H_all, V=H_all)
+```
+
+Where:
+
+```python
+H_all = stack([H_bias, H_emotion, ...])
+```
+
+---
+
+## 6.4 Design Impact
+
+Enables:
+
+* Bias ↔ Emotion coupling
+* Narrative ↔ Propaganda alignment
+* Ideology contextual modulation
+
+---
+
+# 🔷 7. Task Embedding Injection
+
+## 7.1 Definition
+
+```python
+E_task ∈ R^(T × D)
+```
+
+---
+
+## 7.2 Injection Strategy
+
+```python
+H_i = H_i + E_task[i]
+```
+
+Alternative:
+
+```python
+H_i = Linear(concat(H_i, E_task[i]))
+```
+
+---
+
+## 7.3 Purpose
+
+* Encodes task identity explicitly
+* Enables shared encoder to specialize dynamically
+
+---
+
+# 🔷 8. Task Heads (Interdependent)
+
+Each head:
+
+```python
+logits_i = Linear(D → num_classes_i)
+```
+
+But now:
+
+* Inputs are **interaction-enhanced representations**
+* Heads are no longer independent
+
+---
+
+# 🔷 9. Unified Latent Truth Vector (Z)
+
+## 9.1 Construction
+
+```python
+Z = concat([
+  H_bias,
+  H_emotion,
+  H_ideology,
+  H_propaganda,
+  H_narrative
+])
+```
+
+---
+
+## 9.2 Fusion Block
+
+```python
+Z = LayerNorm(Z)
+Z = Linear(Z → D_fusion)
+Z = GELU(Z)
+Z = Dropout(0.1)
+```
+
+---
+
+## 9.3 Output Heads
+
+```python
+credibility_score = sigmoid(Linear(Z))
+risk_logits       = Linear(Z → 3)
+```
+
+---
+
+# 🔷 10. Hybrid Aggregation Strategy
+
+Replace pure rule-based aggregation  with:
+
+```python
+final_score = α * neural_score + (1 - α) * rule_score
+```
+
+Where:
+
+* α ∈ [0.5, 0.8] (tunable or learnable)
+
+---
+
+# 🔷 11. Training Considerations
+
+## 11.1 Stability
+
+* Gradient clipping: 1.0
+* BF16 AMP (retain)
+* LayerNorm after interaction
+
+---
+
+## 11.2 Regularization
+
+* Dropout in:
+
+  * projection layer
+  * interaction layer
+  * fusion layer
+
+---
+
+## 11.3 Task Conflict Mitigation (Recommended)
+
+Use:
+
+* PCGrad OR
+* Uncertainty weighting
+
+---
+
+# 🔷 12. Forward Pass Contract
+
+```python
+{
+  "task_outputs": {
+    "bias": ...,
+    "emotion": ...,
+    "ideology": ...,
+    "propaganda": ...,
+    "narrative": ...
+  },
+  "latent_vector": Z,
+  "credibility_score": score,
+  "risk": risk_logits
+}
+```
+
+---
+
+# 🔷 13. Performance Impact (Expected)
+
+| Area                 | Impact |
+| -------------------- | ------ |
+| Ideology accuracy    | ↑↑     |
+| Narrative reasoning  | ↑↑     |
+| Propaganda detection | ↑      |
+| Generalization       | ↑↑     |
+| Aggregation reliance | ↓↓↓    |
+
+---
+
+# 🔷 14. Key Engineering Insight
+
+Your current system is:
+
+> Multi-task classification + external reasoning
+
+Target system becomes:
+
+> **Integrated reasoning network with emergent credibility scoring**
+
+---
+
+# 🔥 Final Principle
+
+> Do not treat tasks as outputs.
+> Treat them as **interacting signals in a shared semantic space**.
+
+---

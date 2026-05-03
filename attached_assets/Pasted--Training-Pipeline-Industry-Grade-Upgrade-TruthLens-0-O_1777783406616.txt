@@ -1,0 +1,351 @@
+# 📊 Training Pipeline — Industry-Grade Upgrade (TruthLens)
+
+## 0. Objectives
+
+Upgrade the pipeline to:
+
+* **Balance supervision across tasks**
+* **Stabilize multi-task optimization**
+* **Prioritize informative samples**
+* **Progressively increase task coupling**
+
+This directly addresses the limitations of standard batching noted in the current system .
+
+---
+
+# 🔷 1. Task-Balanced Sampling (CRITICAL)
+
+## 1.1 Problem
+
+Standard random batching leads to:
+
+* Dominance of dense tasks (e.g., emotion)
+* Sparse supervision for others (propaganda, ideology)
+* No guarantee of cross-task coverage per batch
+
+---
+
+## 1.2 Design
+
+### Batch Composition Contract
+
+Each batch must include:
+
+* **K₁** samples with bias labels
+* **K₂** samples with emotion labels
+* **K₃** samples with propaganda labels
+* **K₄** mixed-label samples (≥2 tasks present)
+
+```text
+Batch = B_bias ∪ B_emotion ∪ B_prop ∪ B_mixed
+```
+
+---
+
+## 1.3 Implementation (Sampler)
+
+### Step A — Pre-index dataset
+
+```python id="tb_idx"
+indices_by_task = {
+  "bias": [...],
+  "emotion": [...],
+  "propaganda": [...],
+  "ideology": [...],
+  "mixed": [...]
+}
+```
+
+---
+
+### Step B — Custom Batch Sampler
+
+```python id="tb_sampler"
+class TaskBalancedBatchSampler:
+    def __init__(self, indices_by_task, batch_size, ratios):
+        self.idx = indices_by_task
+        self.batch_size = batch_size
+        self.ratios = ratios  # e.g. {"bias":0.2,"emotion":0.2,"mixed":0.4,...}
+
+    def __iter__(self):
+        while True:
+            batch = []
+            for task, r in self.ratios.items():
+                k = int(self.batch_size * r)
+                batch += random.sample(self.idx[task], k)
+            yield batch
+```
+
+---
+
+## 1.4 Constraints
+
+* Ensure **no duplication within batch**
+* Shuffle per epoch
+* Maintain **global class distribution**
+
+---
+
+## 1.5 Advanced (Recommended)
+
+* **Dynamic ratios** based on validation performance:
+
+```python id="dyn_ratio"
+ratio_i ∝ (1 - val_score_i)
+```
+
+👉 Underperforming tasks get more samples
+
+---
+
+# 🔷 2. Curriculum Learning (PHASED TRAINING)
+
+## 2.1 Motivation
+
+Jumping directly into full multi-task training causes:
+
+* Gradient conflict
+* Unstable convergence
+* Weak shared representations
+
+---
+
+## 2.2 Training Phases
+
+### 🔹 Phase 1 — Task-Specific Warmup
+
+* Train each head independently (shared encoder)
+* Freeze cross-task interaction layer
+* Objective:
+
+  * Learn **strong task priors**
+
+```python id="phase1"
+active_tasks = ["bias"]  # rotate per epoch or per run
+```
+
+---
+
+### 🔹 Phase 2 — Joint Multi-Task Training
+
+* Activate all heads
+* Enable interaction layer
+* Use:
+
+  * task-balanced sampling
+  * masked loss
+
+---
+
+### 🔹 Phase 3 — Cross-Task Consistency Optimization
+
+Add consistency constraints:
+
+```python id="cons_loss"
+L_consistency = KL(p_bias || p_ideology)
+              + cosine(H_emotion, H_bias)
+```
+
+Focus:
+
+* Align representations
+* Reduce contradiction between tasks
+
+---
+
+## 2.3 Scheduling
+
+| Phase | Epochs | Notes         |
+| ----- | ------ | ------------- |
+| 1     | 1–2    | warm start    |
+| 2     | 3–6    | main training |
+| 3     | 7–10   | refinement    |
+
+---
+
+## 2.4 Transition Strategy
+
+* Gradually **increase interaction strength**:
+
+```python id="alpha_sched"
+α_t = min(1.0, t / T)
+```
+
+---
+
+# 🔷 3. Hard Example Mining (HIGH IMPACT)
+
+## 3.1 Problem
+
+Most samples are:
+
+* Easy
+* Redundant
+* Low gradient contribution
+
+---
+
+## 3.2 Define Hard Samples
+
+A sample is “hard” if:
+
+### A. High Prediction Uncertainty
+
+```python id="entropy"
+H(p) = -Σ p log p
+```
+
+---
+
+### B. Cross-Task Disagreement
+
+```python id="disagree"
+bias ≠ ideology OR
+emotion contradicts narrative
+```
+
+---
+
+### C. High Loss
+
+```python id="high_loss"
+L_sample > threshold
+```
+
+---
+
+## 3.3 Hard Sample Buffer
+
+Maintain:
+
+```python id="buffer"
+hard_pool = PriorityQueue(max_size=N)
+```
+
+Update per batch:
+
+* Add top-K hardest samples
+* Evict easiest
+
+---
+
+## 3.4 Sampling Strategy
+
+During training:
+
+```python id="mix"
+Batch = 70% normal + 30% hard samples
+```
+
+---
+
+## 3.5 Online Mining (Recommended)
+
+```python id="online"
+if entropy(sample) > τ:
+    hard_pool.add(sample)
+```
+
+---
+
+## 3.6 Curriculum + Hard Mining Integration
+
+| Phase   | Hard Mining |
+| ------- | ----------- |
+| Phase 1 | OFF         |
+| Phase 2 | Partial     |
+| Phase 3 | FULL        |
+
+---
+
+# 🔷 4. Training Loop Integration
+
+## 4.1 Full Step
+
+```python id="train_step"
+for batch in loader:
+
+    outputs = model(batch)
+
+    L_tasks = masked_task_loss(outputs)
+
+    L_consistency = compute_consistency(outputs)
+
+    L_total = L_tasks + λ * L_consistency
+
+    L_total.backward()
+
+    clip_grad_norm_(model.parameters(), 1.0)
+
+    optimizer.step()
+```
+
+---
+
+## 4.2 Logging (MANDATORY)
+
+Track:
+
+* per-task loss
+* per-task accuracy
+* entropy distribution
+* hard sample ratio
+
+---
+
+# 🔷 5. Evaluation Changes
+
+## 5.1 Per-Task Metrics (masked)
+
+Only evaluate where:
+
+```python id="mask_eval"
+task_mask == 1
+```
+
+---
+
+## 5.2 Cross-Task Metrics (NEW)
+
+* agreement score
+* contradiction rate
+* calibration per task
+
+---
+
+# 🔷 6. Expected Gains
+
+| Area                  | Impact |
+| --------------------- | ------ |
+| Training stability    | ↑↑     |
+| Underperforming tasks | ↑↑     |
+| Generalization        | ↑      |
+| Convergence speed     | ↑      |
+| Robustness            | ↑↑     |
+
+---
+
+# 🔥 Final Principle
+
+> Training pipeline is not just optimization.
+> It is **curriculum + data shaping + signal prioritization**.
+
+---
+
+# 🚀 Output Requirements
+
+Implement:
+
+1. `TaskBalancedBatchSampler`
+2. Curriculum scheduler
+3. Hard sample mining module
+4. Modified training loop
+5. Extended logging + metrics
+
+Ensure:
+
+* Scalable to large datasets
+* Compatible with AMP (bf16)
+* Deterministic under seed
+
+---

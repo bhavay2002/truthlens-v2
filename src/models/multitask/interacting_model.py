@@ -20,15 +20,18 @@ Architecture
        ↓
     LatentFusionHead   (concat(H_i') → LayerNorm → Linear → GELU → Z)
        ↓
-    credibility_score  (sigmoid(Linear(Z)))
+    credibility_score  (sigmoid(Linear(Z, 1)))
+    risk_logits        (Linear(Z, 3))
 
-Forward output
---------------
+Forward output  (§12 spec contract)
+------------------------------------
 {
-    "<task>": {"logits": Tensor, ...},   # per-task head dicts
-    "task_logits": {<task>: Tensor},     # LossEngine / training loop compat
-    "latent_vector": Tensor (B, D),      # fused latent representation
-    "credibility_score": Tensor (B,),    # sigmoid credibility in [0, 1]
+    "task_outputs": {<task>: head_dict},  # spec §12 — per-task head dicts
+    "<task>": {"logits": Tensor, ...},    # top-level alias (training loop compat)
+    "task_logits": {<task>: Tensor},      # LossEngine / training loop compat
+    "latent_vector": Tensor (B, D),       # fused latent representation Z
+    "credibility_score": Tensor (B,),     # sigmoid credibility in [0, 1]
+    "risk": Tensor (B, 3),                # raw risk logits (low/med/high)
 }
 
 Compatibility guarantees
@@ -303,18 +306,23 @@ class CrossTaskInteractionLayer(nn.Module):
 # =========================================================
 
 class LatentFusionHead(nn.Module):
-    """Unified latent truth representation + credibility score.
+    """Unified latent truth representation, credibility score, and risk logits.
 
-    Concatenates all per-task representations, projects them into a
-    shared D-dimensional latent space, then produces a scalar credibility
-    score via sigmoid:
+    Spec §9.2 + §9.3:
 
-        Z_cat   = concat([H_bias', H_emotion', ...])  (B, T·D)
-        Z       = Dropout(GELU(Linear(LayerNorm(Z_cat))))  (B, D)
-        score   = sigmoid(Linear(Z, 1))               (B,)
+        Z_cat        = concat([H_bias', H_emotion', ...])  (B, T·D)
+        Z            = Dropout(GELU(Linear(LayerNorm(Z_cat))))  (B, D)
+        score        = sigmoid(Linear(Z, 1))               (B,)
+        risk_logits  = Linear(Z, 3)                        (B, 3)
 
-    Returns both Z (for downstream use, e.g. calibration) and the score.
+    ``risk_logits`` are raw (unactivated) — callers apply softmax or
+    cross-entropy as needed. The three classes follow the canonical
+    TruthLens risk taxonomy: low / medium / high.
+
+    Returns Z, score, and risk_logits for downstream use.
     """
+
+    NUM_RISK_CLASSES: int = 3  # low / medium / high
 
     def __init__(
         self,
@@ -330,18 +338,25 @@ class LatentFusionHead(nn.Module):
         self.proj = nn.Linear(concat_dim, hidden_size)
         self.act = nn.GELU()
         self.drop = nn.Dropout(dropout)
+
+        # §9.3 — credibility score head
         self.score_head = nn.Linear(hidden_size, 1)
+
+        # §9.3 — risk classification head (low / medium / high)
+        self.risk_head = nn.Linear(hidden_size, self.NUM_RISK_CLASSES)
 
         nn.init.xavier_uniform_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
-        # Score head: zero bias → 0.5 initial credibility (sigmoid(0))
+        # score_head: zero bias → sigmoid(0) = 0.5 initial credibility
         nn.init.xavier_uniform_(self.score_head.weight)
         nn.init.zeros_(self.score_head.bias)
+        nn.init.xavier_uniform_(self.risk_head.weight)
+        nn.init.zeros_(self.risk_head.bias)
 
     def forward(
         self,
         task_reprs: List[torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
@@ -349,19 +364,21 @@ class LatentFusionHead(nn.Module):
 
         Returns
         -------
-        Z     : (B, D) latent vector
-        score : (B,)  credibility score in [0, 1]
+        Z           : (B, D)  latent truth vector
+        score       : (B,)    credibility score in [0, 1]
+        risk_logits : (B, 3)  raw risk logits (low / medium / high)
         """
-        Z_cat = torch.cat(task_reprs, dim=-1)           # (B, T·D)
+        Z_cat = torch.cat(task_reprs, dim=-1)                   # (B, T·D)
         Z_cat = self.input_norm(Z_cat)
 
-        Z = self.proj(Z_cat)                            # (B, D)
+        Z = self.proj(Z_cat)                                    # (B, D)
         Z = self.act(Z)
         Z = self.drop(Z)
 
-        score = torch.sigmoid(self.score_head(Z)).squeeze(-1)  # (B,)
+        score = torch.sigmoid(self.score_head(Z)).squeeze(-1)   # (B,)
+        risk_logits = self.risk_head(Z)                         # (B, 3)
 
-        return Z, score
+        return Z, score, risk_logits
 
 
 # =========================================================
@@ -542,11 +559,13 @@ class InteractingMultiTaskModel(MultiTaskTruthLensModel):
 
         Returns
         -------
-        dict with:
-            ``"<task>"``         : per-task head output dict (has "logits")
-            ``"task_logits"``    : {task: logits_tensor}
-            ``"latent_vector"``  : (B, D) unified latent representation Z
+        dict with (spec §12):
+            ``"task_outputs"``    : {task: head_dict}  — spec §12 primary key
+            ``"<task>"``          : per-task head output dict (training loop alias)
+            ``"task_logits"``     : {task: logits_tensor}  — LossEngine compat
+            ``"latent_vector"``   : (B, D) unified latent representation Z
             ``"credibility_score"``: (B,) sigmoid credibility in [0, 1]
+            ``"risk"``            : (B, 3) raw risk logits (low / medium / high)
         """
 
         # ── 1. Encode ────────────────────────────────────────────────────
@@ -609,12 +628,18 @@ class InteractingMultiTaskModel(MultiTaskTruthLensModel):
             t: outputs[t]["logits"] for t in self._task_names
         }
 
-        # ── 7. Latent fusion + credibility score ─────────────────────────
-        ordered_refined = [task_reprs[t] for t in self._task_names]
-        Z, neural_score = self.fusion(ordered_refined)          # (B, D), (B,)
+        # ── 7. Spec §12 — "task_outputs" primary key ─────────────────────
+        # Per-task head dicts are also stored at the top level (above) for
+        # the training loop; "task_outputs" is the spec §12 contract key.
+        outputs["task_outputs"] = {t: outputs[t] for t in self._task_names}
 
-        outputs["latent_vector"] = Z
-        outputs["credibility_score"] = neural_score
+        # ── 8. Latent fusion, credibility score, and risk logits (§9.3) ──
+        ordered_refined = [task_reprs[t] for t in self._task_names]
+        Z, neural_score, risk_logits = self.fusion(ordered_refined)
+
+        outputs["latent_vector"] = Z            # (B, D)
+        outputs["credibility_score"] = neural_score  # (B,)
+        outputs["risk"] = risk_logits           # (B, 3) — low/medium/high
 
         return outputs
 
