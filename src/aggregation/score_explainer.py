@@ -325,9 +325,17 @@ class ScoreExplainer:
 
         contributions: List[Tuple[str, str, float]] = []
         section_scores: Dict[str, float] = {}
+        section_counts: Dict[str, int] = {}
 
         # REC-AG-4: single pass instead of O(N·S). Build the section
         # totals while collecting contributions for the top-k.
+        #
+        # NORM-AG-EXP: profile features can be raw counts, logits, or
+        # probabilities — a busy section with N features each at 0.9
+        # would accumulate 0.9·N, far outside [0, 1]. Clamp each
+        # feature to [0, 1] and track the count so we can divide at the
+        # end, yielding a per-section *mean* in [0, 1] rather than a
+        # raw sum that the downstream clip silently truncates.
         for section, payload in profile.items():
             if not isinstance(payload, dict):
                 continue
@@ -339,7 +347,14 @@ class ScoreExplainer:
                 if not math.isfinite(val):
                     continue
                 contributions.append((section, str(k), val))
-                section_scores[section] = section_scores.get(section, 0.0) + val
+                clamped = min(1.0, max(0.0, val))
+                section_scores[section] = section_scores.get(section, 0.0) + clamped
+                section_counts[section] = section_counts.get(section, 0) + 1
+
+        # Normalise accumulated sums → per-section mean in [0, 1].
+        for section in list(section_scores.keys()):
+            n = section_counts.get(section, 1) or 1
+            section_scores[section] = section_scores[section] / n
 
         contributions.sort(key=lambda x: -abs(x[2]))
 

@@ -234,13 +234,19 @@ def compute_batch_metrics(batch_scores: List[Dict[str, float]]) -> Dict[str, Any
     if not batch_scores:
         return {}
 
-    keys = batch_scores[0].keys()
+    # BATCH-METRIC: collecting keys only from batch_scores[0] silently
+    # drops any keys that appear in later samples but not the first.
+    # Build the union of all keys across every sample so no metric is
+    # lost, then default missing entries to 0.0.
+    keys: set = set()
+    for sample in batch_scores:
+        keys.update(sample.keys())
 
     aggregated: Dict[str, List[float]] = {k: [] for k in keys}
 
     for sample in batch_scores:
         for k in keys:
-            aggregated[k].append(sample[k])
+            aggregated[k].append(sample.get(k, 0.0))
 
     results = {}
 

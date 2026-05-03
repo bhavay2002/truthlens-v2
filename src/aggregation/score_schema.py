@@ -55,11 +55,11 @@ class TaskScore(BaseModel):
 class TruthLensScoreModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    tasks: Dict[str, TaskScore]
+    tasks: Dict[str, TaskScore] = {}
 
-    manipulation_risk: float
-    credibility_score: float
-    final_score: float
+    manipulation_risk: float = 0.0
+    credibility_score: float = 0.0
+    final_score: float = 0.0
 
     # 🔥 NEW
     uncertainty_summary: Optional[Dict[str, float]] = None
@@ -67,6 +67,21 @@ class TruthLensScoreModel(BaseModel):
     # Aggregation Engine v2 — neural + hybrid outputs
     neural_credibility_score: Optional[float] = None
     hybrid_alpha: Optional[float] = None
+
+    # TST-AG-SCHEMA: flat per-section score fields (truthlens_* prefix).
+    # These mirror the section scores produced by the calculator so that
+    # callers can access them as direct attributes without unpacking the
+    # `tasks` dict.  All are Optional[float] so existing construction
+    # paths that only populate `tasks` / composite scores are unaffected.
+    truthlens_bias_score: Optional[float] = None
+    truthlens_emotion_score: Optional[float] = None
+    truthlens_narrative_score: Optional[float] = None
+    truthlens_discourse_score: Optional[float] = None
+    truthlens_graph_score: Optional[float] = None
+    truthlens_ideology_score: Optional[float] = None
+    truthlens_manipulation_risk: Optional[float] = None
+    truthlens_credibility_score: Optional[float] = None
+    truthlens_final_score: Optional[float] = None
 
     @field_validator("tasks")
     @classmethod
@@ -82,6 +97,28 @@ class TruthLensScoreModel(BaseModel):
         fv = float(v)
         if not math.isfinite(fv):
             raise ValueError("Must be finite")
+        return fv
+
+    @field_validator(
+        "truthlens_bias_score",
+        "truthlens_emotion_score",
+        "truthlens_narrative_score",
+        "truthlens_discourse_score",
+        "truthlens_graph_score",
+        "truthlens_ideology_score",
+        "truthlens_manipulation_risk",
+        "truthlens_credibility_score",
+        "truthlens_final_score",
+    )
+    @classmethod
+    def validate_section_score(cls, v):
+        if v is None:
+            return v
+        fv = float(v)
+        if not math.isfinite(fv):
+            raise ValueError("Must be finite")
+        if not (0.0 <= fv <= 1.0):
+            raise ValueError("Must be in [0, 1]")
         return fv
 
 

@@ -46,6 +46,47 @@ _GRAPH_SIGNAL_KEYS = (
 )
 
 
+# =========================================================
+# SCORE VECTOR UTILITY
+# =========================================================
+
+# Canonical ordering for truthlens_score_vector — stable across versions.
+_SCORE_VECTOR_KEYS: tuple = (
+    "truthlens_bias_score",
+    "truthlens_emotion_score",
+    "truthlens_narrative_score",
+    "truthlens_discourse_score",
+    "truthlens_graph_score",
+    "truthlens_ideology_score",
+    "truthlens_manipulation_risk",
+    "truthlens_credibility_score",
+    "truthlens_final_score",
+)
+
+
+def truthlens_score_vector(scores: Dict[str, float]) -> "np.ndarray":
+    """Return a fixed-order float32 numpy vector from a flat scores dict.
+
+    Parameters
+    ----------
+    scores : dict
+        Must contain every key listed in ``_SCORE_VECTOR_KEYS``.
+
+    Returns
+    -------
+    np.ndarray, shape (9,), dtype float32
+
+    Raises
+    ------
+    RuntimeError
+        When any required key is absent from *scores*.
+    """
+    try:
+        return np.array([scores[k] for k in _SCORE_VECTOR_KEYS], dtype=np.float32)
+    except KeyError as exc:
+        raise RuntimeError(f"Missing score key: {exc}") from exc
+
+
 def _renorm_group(weights: Dict[str, float], keys) -> None:
     total = sum(weights[k] for k in keys if k in weights) + EPS
     for k in keys:
@@ -137,7 +178,15 @@ class TruthLensScoreCalculator:
 
             base_val = self._aggregate(data)
 
-            val = base_val + self.graph_influence_cap * graph_signal
+            # CRIT-AG-BLEND: the graph correction is a graph-network signal
+            # (centrality, density, consistency). Applying it to every section
+            # — bias, emotion, narrative, etc. — inflates unrelated scores and
+            # confounds the composite formulas. Restrict it to the "graph"
+            # section only, where it is semantically meaningful.
+            if section == "graph":
+                val = base_val + self.graph_influence_cap * graph_signal
+            else:
+                val = base_val
 
             debug_info: Dict[str, Any] = {
                 "base": base_val,
@@ -202,8 +251,16 @@ class TruthLensScoreCalculator:
         # dominated this hot path for the typical 1-3 element vectors.
         # Using `math.fsum` keeps the running-sum precision on par
         # with numpy.mean for these sizes.
+        #
+        # CRIT-AG-SCALE: upstream section dicts can contain raw counts
+        # (e.g. {"probability": 0.82, "intensity": 150.0}). Averaging
+        # those with probabilities yields garbage (75.4 → clamped to 1.0,
+        # masking the real signal). Clamp each value to [0, 1] before the
+        # mean so the average stays in the probability space regardless of
+        # what the feature extractor emits.
         vals = [
-            float(v) for v in section_data.values()
+            min(1.0, max(0.0, float(v)))
+            for v in section_data.values()
             if isinstance(v, (int, float))
             and not isinstance(v, bool)
             and math.isfinite(v)

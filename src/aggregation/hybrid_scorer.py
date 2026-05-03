@@ -191,6 +191,37 @@ class HybridScorer:
         neural_scores = list(neural_scores) if neural_scores is not None else [None] * n
         mean_confidences = list(mean_confidences) if mean_confidences is not None else [None] * n
 
+        # PERF-AG-BATCH: fast vectorised path for the common case where all
+        # neural scores are available and alpha is static (no per-sample
+        # confidence look-up needed). Collapses N Python call frames into a
+        # single NumPy BLAS operation.
+        if (
+            not self.dynamic
+            and all(ns is not None for ns in neural_scores)
+        ):
+            ns_arr = np.clip(
+                np.array([_safe_float(ns) for ns in neural_scores], dtype=np.float64),
+                0.0, 1.0,
+            )
+            rs_arr = np.clip(
+                np.array([_safe_float(rs) for rs in rule_scores], dtype=np.float64),
+                0.0, 1.0,
+            )
+            finals = np.clip(
+                self.alpha * ns_arr + (1.0 - self.alpha) * rs_arr,
+                0.0, 1.0,
+            )
+            return [
+                {
+                    "final":  float(f),
+                    "neural": float(ns),
+                    "rule":   float(rs),
+                    "alpha":  self.alpha,
+                    "mode":   "static",
+                }
+                for f, ns, rs in zip(finals, ns_arr, rs_arr)
+            ]
+
         return [
             self.score(ns, rs, mean_confidence=mc)
             for ns, rs, mc in zip(neural_scores, rule_scores, mean_confidences)

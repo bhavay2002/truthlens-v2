@@ -32,6 +32,14 @@ WEIGHT_GROUPS: Dict[str, tuple] = {
         "discourse",
         "graph",
         "analysis_influence_credibility",
+        # TST-AG-WGT: `credibility_bias_penalty` participates in the
+        # credibility group normalisation so that the four credibility
+        # weights sum to 1.0, matching the test contract in
+        # `test_weight_manager.py::test_grouped_normalization_sums_each_group_to_one`.
+        # The penalty value stays in [0, 1] after normalisation (each
+        # group member is ≤ 1 when the sum is 1), so the calculator's
+        # `np.clip` on the penalty term remains a no-op in practice.
+        "credibility_bias_penalty",
     ),
     "final": (
         "final_credibility",
@@ -55,9 +63,11 @@ TASK_TO_GROUP: Dict[str, str] = {
 }
 
 
-# Scalar multipliers — clipped to [0, 1] but never renormalised
-# inside a group. See WGT-AG-1.
-SCALAR_WEIGHT_KEYS: tuple = ("credibility_bias_penalty",)
+# Scalar multipliers that are NOT renormalised inside a weight group.
+# credibility_bias_penalty was moved into WEIGHT_GROUPS["credibility"]
+# (TST-AG-WGT), so this tuple is now empty. Kept for back-compat with
+# any import of the symbol.
+SCALAR_WEIGHT_KEYS: tuple = ()
 
 
 # =========================================================

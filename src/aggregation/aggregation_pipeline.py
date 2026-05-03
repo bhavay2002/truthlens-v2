@@ -699,6 +699,50 @@ class AggregationPipeline:
         return self.mapper.map_from_model_outputs(prediction)
 
     # =====================================================
+    # PROFILE HELPERS (TST-AG-PIPELINE)
+    # =====================================================
+
+    @staticmethod
+    def _inject_analysis_sections(
+        profile: Dict[str, Any],
+        analysis_modules: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Return a new profile dict with *analysis_modules* merged in.
+
+        The original *profile* is never mutated — a shallow copy of the
+        top-level dict is made and only the new section dicts from
+        *analysis_modules* are added to it.
+        """
+        merged = dict(profile)
+        for section, payload in analysis_modules.items():
+            merged[section] = payload
+        return merged
+
+    @staticmethod
+    def normalize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a copy of *profile* with numeric values cast to float.
+
+        Non-numeric values (booleans, strings, nested dicts, …) are
+        preserved verbatim so callers can safely round-trip profiles
+        that carry mixed-type bookkeeping flags alongside real features.
+        """
+        out: Dict[str, Any] = {}
+        for section, payload in profile.items():
+            if not isinstance(payload, dict):
+                out[section] = payload
+                continue
+            section_out: Dict[str, Any] = {}
+            for k, v in payload.items():
+                if isinstance(v, bool):
+                    section_out[k] = v
+                elif isinstance(v, (int, float)):
+                    section_out[k] = float(v)
+                else:
+                    section_out[k] = v
+            out[section] = section_out
+        return out
+
+    # =====================================================
     # ENTROPY — moved into FeatureMapper.extract_task_signals
     # (REC-AG-1). The previous in-pipeline `_compute_entropy` ran
     # the same softmax/nan_to_num pass that the mapper had already

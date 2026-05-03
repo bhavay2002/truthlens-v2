@@ -335,6 +335,13 @@ class WeightManager:
             if self.frozen:
                 raise RuntimeError("Weights frozen")
 
+            # TST-AG-ADJ: reject keys that are not already part of the
+            # weight dict (i.e. not in DEFAULT_WEIGHTS and not previously
+            # merged in). Silently adding unknown keys would corrupt the
+            # group-normalisation invariants.
+            if key not in self.weights:
+                raise KeyError(key)
+
             self.weights[key] = float(value)
 
             self._validate_weights(self.weights)

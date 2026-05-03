@@ -209,7 +209,9 @@ class AggregatorTrainer:
 
         total = L_bce + self.lambda1 * L_mse + self.lambda2 * L_cal
 
-        return {"total": total, "bce": L_bce, "mse": L_mse, "cal": L_cal}
+        # PERF-AG-TRAINER: return `pred` so callers (evaluate) can reuse
+        # the predictions without a second aggregator forward pass.
+        return {"total": total, "bce": L_bce, "mse": L_mse, "cal": L_cal, "pred": pred}
 
     def _soft_ece(
         self, pred: torch.Tensor, y: torch.Tensor
@@ -314,9 +316,10 @@ class AggregatorTrainer:
                 for k in totals:
                     totals[k] += losses[k].item()
 
-                from src.aggregation.neural_aggregator import NeuralAggregatorOutput
-                out: NeuralAggregatorOutput = self.aggregator(x)
-                all_preds.extend(out.credibility_score.cpu().tolist())
+                # PERF-AG-TRAINER: reuse the predictions already computed
+                # inside compute_loss (stored as "pred" in the return dict)
+                # instead of running a second aggregator forward pass.
+                all_preds.extend(losses["pred"].cpu().tolist())
                 all_labels.extend(y.cpu().tolist())
                 n_batches += 1
 

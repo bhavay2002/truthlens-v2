@@ -227,7 +227,11 @@ class IsotonicCalibrator(BaseCalibrator):
                 calibrated[:, c] = model.transform(arr[:, c])
             calibrated = calibrated / (np.sum(calibrated, axis=1, keepdims=True) + EPS)
         else:
-            calibrated = self.models[0].transform(arr)
+            # CAL-AG-1D: IsotonicRegression is fit on binary labels so its
+            # output is theoretically in [0, 1], but floating-point
+            # arithmetic can produce values marginally outside that range.
+            # Clip explicitly to guarantee the contract.
+            calibrated = np.clip(self.models[0].transform(arr), 0.0, 1.0)
         return _to_output(calibrated, logits)
 
 
