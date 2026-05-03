@@ -239,12 +239,26 @@ def _gradient_based_attribution(
 # =========================================================
 
 def _row_normalise(matrix: InfluenceMatrix, task_names: List[str]) -> InfluenceMatrix:
-    """L1-normalise each row so influence weights sum to 1 per target task."""
+    """L1-normalise each row so influence weights sum to 1 per target task.
+
+    Degenerate case: if all influence values in a row are (near-)zero — which
+    happens when all gradient norms are zero (e.g. a task whose refined
+    representation is constant w.r.t. every other task's pre-interaction
+    representation) — fall back to a uniform distribution rather than emitting
+    an all-zero row.  A uniform distribution is the maximally-uninformative
+    prior and correctly reflects "no measurable cross-task influence".
+    """
+    n = len(task_names)
+    uniform = {task_j: 1.0 / n for task_j in task_names}
     out: InfluenceMatrix = {}
     for task_i in task_names:
         row = matrix[task_i]
-        total = sum(abs(v) for v in row.values()) + _EPS
-        out[task_i] = {task_j: v / total for task_j, v in row.items()}
+        total = sum(abs(v) for v in row.values())
+        if total < _EPS:
+            # All zero — use uniform distribution
+            out[task_i] = dict(uniform)
+        else:
+            out[task_i] = {task_j: v / total for task_j, v in row.items()}
     return out
 
 

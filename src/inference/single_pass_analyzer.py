@@ -374,10 +374,8 @@ class SinglePassAnalyzer:
             token_list = []
 
         # ── 5. Async fan-out ──────────────────────────────────────────
-        cross_task_task = self._async_cross_task(encoded, warnings)
-        graph_placeholder = asyncio.coroutine(lambda: None)()  # will wait after cross_task
-
-        cross_task_result = await cross_task_task
+        # asyncio.coroutine was removed in Python 3.12; run steps sequentially.
+        cross_task_result = await self._async_cross_task(encoded, warnings)
 
         graph_result = await self._async_attention_graph(
             token_list, model_outputs, cross_task_result, warnings
