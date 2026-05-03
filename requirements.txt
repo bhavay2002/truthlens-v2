@@ -286,3 +286,8 @@ transformers
 uvicorn[standard]
 vaderSentiment
 wordcloud
+fastapi
+gunicorn
+pydantic
+pyyaml
+uvicorn[standard]
