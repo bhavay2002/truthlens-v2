@@ -58,6 +58,8 @@ from .cross_validation import (
     build_dashboard,
 )
 from .create_trainer_fn import create_trainer_fn
+from .curriculum import CurriculumScheduler, CurriculumConfig, CurriculumState
+from .hard_sample_miner import HardSampleMiner, HardSampleMinerConfig
 
 # Optuna-backed tuning is optional — import lazily.
 _LAZY = {
@@ -129,6 +131,12 @@ __all__ = [
     "resolve_metric",
     "build_dashboard",
     "create_trainer_fn",
+    # Curriculum + hard mining
+    "CurriculumScheduler",
+    "CurriculumConfig",
+    "CurriculumState",
+    "HardSampleMiner",
+    "HardSampleMinerConfig",
     # Tuning (lazy)
     "tune_task",
     "tune_all_tasks",

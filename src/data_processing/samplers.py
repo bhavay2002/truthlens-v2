@@ -13,7 +13,8 @@ New in this version:
 from __future__ import annotations
 
 import logging
-from typing import Iterator, List, Optional
+import math
+from typing import Dict, Iterator, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -177,6 +178,284 @@ class TaskPresenceMaskSampler(Sampler):
 
     def __len__(self) -> int:
         return self._num_samples
+
+
+# =========================================================
+# TASK-BALANCED BATCH SAMPLER  (spec §1 — Training Pipeline Upgrade)
+# =========================================================
+
+class TaskBalancedBatchSampler(Sampler):
+    """Batch sampler that guarantees per-task sample coverage in every batch.
+
+    Spec §1 design
+    --------------
+    Each batch is composed as::
+
+        Batch = B_bias ∪ B_emotion ∪ B_propaganda ∪ B_mixed
+
+    where the fraction of each group is controlled by ``ratios``.
+
+    Parameters
+    ----------
+    indices_by_task:
+        Mapping from group name (e.g. ``"bias"``, ``"emotion"``,
+        ``"mixed"``) to the list of dataset indices that carry labels
+        for that group. Groups not in ``ratios`` are ignored.
+    batch_size:
+        Total number of samples per yielded batch.
+    ratios:
+        Dict mapping group name → fraction of ``batch_size`` to draw
+        from that group. Must sum to ≤ 1.0. Any remaining budget after
+        all group quotas are filled is pulled from whichever pool has
+        the most remaining samples.
+    seed:
+        Random seed for reproducibility (spec output req).
+    drop_last:
+        If ``True``, drop the final batch when it is shorter than
+        ``batch_size`` (same semantics as ``DataLoader(drop_last=True)``).
+
+    Spec constraints (§1.4)
+    -----------------------
+    * No index appears more than once within a single yielded batch.
+    * Each pool is shuffled at the start of every epoch.
+    * When a pool is exhausted mid-epoch it is refilled and reshuffled
+      (sampling with replacement for that pool, preserving global class
+      distribution).
+
+    Dynamic ratio update (spec §1.5)
+    ---------------------------------
+    Call ``update_ratios(val_scores)`` after each validation step.
+    The ratio for each task is proportional to ``(1 − val_score_i)``
+    so under-performing tasks automatically receive more samples.
+    """
+
+    def __init__(
+        self,
+        indices_by_task: Dict[str, List[int]],
+        batch_size: int,
+        ratios: Dict[str, float],
+        seed: int = 42,
+        drop_last: bool = False,
+    ) -> None:
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if not ratios:
+            raise ValueError("ratios must be non-empty")
+
+        total_ratio = sum(ratios.values())
+        if total_ratio > 1.0 + 1e-6:
+            raise ValueError(
+                f"ratios sum to {total_ratio:.4f} which exceeds 1.0; "
+                "reduce individual ratios so they fit within one batch."
+            )
+
+        unknown = [k for k in ratios if k not in indices_by_task]
+        if unknown:
+            raise ValueError(
+                f"ratios reference groups not in indices_by_task: {unknown}"
+            )
+
+        self.indices_by_task: Dict[str, List[int]] = {
+            k: list(v) for k, v in indices_by_task.items()
+        }
+        self.batch_size = batch_size
+        self.ratios: Dict[str, float] = dict(ratios)
+        self.seed = seed
+        self.drop_last = drop_last
+
+        # Epoch counter (incremented in __iter__) used to diversify seeds
+        self._epoch: int = 0
+
+        # Compute total unique samples across all referenced groups
+        all_idx: set = set()
+        for task in ratios:
+            all_idx.update(self.indices_by_task[task])
+        self._total_unique: int = max(len(all_idx), 1)
+
+        logger.info(
+            "TaskBalancedBatchSampler | groups=%s | batch=%d | "
+            "unique_samples=%d | ratios=%s",
+            list(ratios.keys()),
+            batch_size,
+            self._total_unique,
+            {k: round(v, 3) for k, v in ratios.items()},
+        )
+
+    # -----------------------------------------------------------------------
+    # Sampler protocol
+    # -----------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return self._total_unique // self.batch_size
+        return math.ceil(self._total_unique / self.batch_size)
+
+    def __iter__(self):
+        import random as _random
+        from collections import deque
+
+        rng = _random.Random(self.seed + self._epoch)
+        self._epoch += 1
+
+        # Shuffle each pool and wrap in a deque
+        queues: Dict[str, deque] = {}
+        for task in self.ratios:
+            pool = list(self.indices_by_task[task])
+            rng.shuffle(pool)
+            queues[task] = deque(pool)
+
+        # Track how many unique samples have been yielded
+        yielded = 0
+        target = len(self)
+
+        for _ in range(target):
+            batch: List[int] = []
+            used_in_batch: set = set()
+
+            # ── Fill from each task pool according to its ratio ────────────
+            for task, ratio in self.ratios.items():
+                k = max(1, round(self.batch_size * ratio))
+                q = queues[task]
+                added = 0
+                while added < k and len(batch) < self.batch_size:
+                    if not q:
+                        # Refill (with replacement) for this pool
+                        fresh = list(self.indices_by_task[task])
+                        rng.shuffle(fresh)
+                        q = deque(fresh)
+                        queues[task] = q
+                    idx = q.popleft()
+                    if idx not in used_in_batch:
+                        batch.append(idx)
+                        used_in_batch.add(idx)
+                        added += 1
+
+            # ── Fill any remaining budget from the largest pool ────────────
+            if len(batch) < self.batch_size:
+                remaining = self.batch_size - len(batch)
+                sorted_tasks = sorted(
+                    queues.keys(),
+                    key=lambda t: len(queues[t]),
+                    reverse=True,
+                )
+                for task in sorted_tasks:
+                    q = queues[task]
+                    while remaining > 0:
+                        if not q:
+                            break
+                        idx = q.popleft()
+                        if idx not in used_in_batch:
+                            batch.append(idx)
+                            used_in_batch.add(idx)
+                            remaining -= 1
+                    if remaining == 0:
+                        break
+
+            # ── Drop-last gate ──────────────────────────────────────────────
+            if len(batch) < self.batch_size and self.drop_last:
+                break
+
+            if batch:
+                rng.shuffle(batch)
+                yield batch
+                yielded += len(batch)
+
+    # -----------------------------------------------------------------------
+    # Dynamic ratio update (spec §1.5)
+    # -----------------------------------------------------------------------
+
+    def update_ratios(self, val_scores: Dict[str, float]) -> None:
+        """Adjust sampling ratios proportional to ``(1 − val_score_i)``.
+
+        Under-performing tasks (low validation score) receive a larger
+        share of each batch on the next epoch.
+
+        Parameters
+        ----------
+        val_scores:
+            Dict mapping group name → validation score in [0, 1].
+            Groups absent from ``val_scores`` keep their current ratio.
+        """
+        gaps: Dict[str, float] = {}
+        for task in self.ratios:
+            score = val_scores.get(task, 1.0 - self.ratios[task])
+            gaps[task] = max(0.0, 1.0 - float(score))
+
+        total_gap = sum(gaps.values())
+        if total_gap < 1e-9:
+            logger.debug(
+                "TaskBalancedBatchSampler.update_ratios: all tasks at "
+                "perfect performance — ratios unchanged."
+            )
+            return
+
+        new_ratios = {t: g / total_gap for t, g in gaps.items()}
+        self.ratios = new_ratios
+
+        logger.info(
+            "TaskBalancedBatchSampler ratios updated: %s",
+            {k: round(v, 3) for k, v in new_ratios.items()},
+        )
+
+    # -----------------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def build_indices_by_task(
+        task_mask_matrix: np.ndarray,
+        task_names: List[str],
+        mixed_threshold: int = 2,
+    ) -> Dict[str, List[int]]:
+        """Pre-index a dataset into per-task and mixed-task groups.
+
+        Parameters
+        ----------
+        task_mask_matrix:
+            Boolean / int array of shape (N, T). Entry [i, t] = 1 means
+            sample i has a valid label for task t.
+        task_names:
+            Ordered list of task names corresponding to columns of
+            ``task_mask_matrix``.
+        mixed_threshold:
+            Minimum number of active tasks for a sample to be placed in
+            the ``"mixed"`` group (spec §1.2 — K₄ mixed-label samples).
+
+        Returns
+        -------
+        Dict mapping each task name and ``"mixed"`` to lists of indices.
+        """
+        task_mask_matrix = np.asarray(task_mask_matrix, dtype=np.int32)
+        if task_mask_matrix.ndim != 2:
+            raise ValueError(
+                "task_mask_matrix must be 2-D (N, T); "
+                f"got shape {task_mask_matrix.shape}"
+            )
+        N, T = task_mask_matrix.shape
+        if len(task_names) != T:
+            raise ValueError(
+                f"task_names has {len(task_names)} entries but "
+                f"task_mask_matrix has {T} columns."
+            )
+
+        result: Dict[str, List[int]] = {t: [] for t in task_names}
+        result["mixed"] = []
+
+        for i in range(N):
+            row = task_mask_matrix[i]
+            active_tasks = [task_names[j] for j in range(T) if row[j]]
+            for task in active_tasks:
+                result[task].append(i)
+            if len(active_tasks) >= mixed_threshold:
+                result["mixed"].append(i)
+
+        logger.info(
+            "TaskBalancedBatchSampler.build_indices_by_task | "
+            "N=%d | sizes=%s",
+            N,
+            {k: len(v) for k, v in result.items()},
+        )
+        return result
 
 
 # =========================================================

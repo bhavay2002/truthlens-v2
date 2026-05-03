@@ -45,6 +45,14 @@ from src.data_processing.collate import (
     build_collate_fn,
 )
 
+from src.data_processing.samplers import (
+    TaskBalancedBatchSampler,
+    TaskPresenceMaskSampler,
+    build_classification_sampler,
+    build_multilabel_sampler,
+    build_sampler,
+)
+
 __all__ = [
     "CONTRACTS",
     "DataContract",
@@ -67,4 +75,9 @@ __all__ = [
     "DataLoaderConfig",
     "collate_fn",
     "build_collate_fn",
+    "TaskBalancedBatchSampler",
+    "TaskPresenceMaskSampler",
+    "build_classification_sampler",
+    "build_multilabel_sampler",
+    "build_sampler",
 ]

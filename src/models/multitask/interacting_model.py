@@ -633,6 +633,14 @@ class InteractingMultiTaskModel(MultiTaskTruthLensModel):
         # the training loop; "task_outputs" is the spec §12 contract key.
         outputs["task_outputs"] = {t: outputs[t] for t in self._task_names}
 
+        # ── 7b. Task representations (post-interaction; for ConsistencyLoss)
+        # Exposed here so the Phase 3 ConsistencyLoss can compute
+        # cosine(H_emotion, H_bias) without a second forward pass.
+        # Key: "task_representations" → Dict[str, (B, D)]
+        outputs["task_representations"] = {
+            t: task_reprs[t] for t in self._task_names
+        }
+
         # ── 8. Latent fusion, credibility score, and risk logits (§9.3) ──
         ordered_refined = [task_reprs[t] for t in self._task_names]
         Z, neural_score, risk_logits = self.fusion(ordered_refined)

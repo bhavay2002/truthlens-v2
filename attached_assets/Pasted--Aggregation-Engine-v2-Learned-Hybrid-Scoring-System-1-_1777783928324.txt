@@ -1,0 +1,342 @@
+# 🔍 Aggregation Engine v2 — Learned + Hybrid Scoring System
+
+## 1. Context
+
+Current system:
+
+* Rule-based weighted aggregation (`WeightManager → ScoreCalculator`)
+* Static mappings from signals → credibility score 
+
+### Limitations:
+
+* Fixed weights → no adaptation per sample
+* Cannot learn cross-signal dependencies
+* Hard to scale with new features (analyzers, graph signals)
+
+---
+
+# 🎯 2. Target Architecture
+
+> Replace static aggregation with a **Neural Aggregator**, while retaining rule-based scoring for interpretability.
+
+---
+
+## 🔷 2.1 High-Level Flow
+
+```id="agg_flow"
+Model Outputs + Analyzer Signals
+            ↓
+    Feature Standardization
+            ↓
+    Neural Aggregator (MLP / Transformer)
+            ↓
+   ┌───────────────┬───────────────┐
+   ↓               ↓               ↓
+credibility_score  risk_logits  explanation_weights
+```
+
+---
+
+# 🧠 3. Input Representation (CRITICAL)
+
+## 3.1 Feature Vector Construction
+
+Aggregate ALL signals into a single structured vector:
+
+```python id="feat_vec"
+X = [
+  bias_score,
+  bias_confidence,
+  emotion_vector (11D),
+  ideology_probs (3D),
+  propaganda_score,
+  narrative_roles (3D),
+  narrative_frames (5D),
+  analyzer_features (N),
+  entropy_metrics,
+  confidence_scores
+]
+```
+
+---
+
+## 3.2 Feature Engineering Rules
+
+* Normalize all features → `[0, 1]`
+* Log-scale skewed distributions
+* Include **uncertainty features**:
+
+  * entropy
+  * variance across heads
+
+---
+
+## 3.3 Optional (Advanced)
+
+Add:
+
+```python id="meta"
+cross_task_features = [
+  bias × emotion,
+  propaganda × narrative,
+  ideology × emotion
+]
+```
+
+---
+
+# ⚙️ 4. Neural Aggregator Design
+
+## 4.1 Baseline (Production Default)
+
+### MLP Aggregator
+
+```python id="mlp"
+class NeuralAggregator(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.LayerNorm(input_dim),
+            nn.Linear(input_dim, 256),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.GELU(),
+            nn.Linear(128, 1)
+        )
+
+    def forward(self, x):
+        return torch.sigmoid(self.net(x))
+```
+
+---
+
+## 4.2 Advanced (Recommended)
+
+### Feature Attention Aggregator
+
+```python id="attn"
+weights = softmax(W_attn * X)
+Z = Σ(weights * X)
+score = MLP(Z)
+```
+
+👉 Learns:
+
+* Which signals matter per sample
+* Dynamic importance weighting
+
+---
+
+## 4.3 Transformer Aggregator (High-End)
+
+Treat each signal group as a token:
+
+```python id="tokens"
+tokens = [
+  bias_token,
+  emotion_token,
+  ideology_token,
+  narrative_token,
+  analyzer_token
+]
+```
+
+Then:
+
+```python id="trans"
+Z = TransformerEncoder(tokens)
+score = Linear(Z[CLS])
+```
+
+---
+
+# 📊 5. Multi-Output Head
+
+## Outputs:
+
+```python id="outputs"
+credibility_score = sigmoid(z)
+risk_logits       = softmax(z_risk)
+explanation_wts   = softmax(z_exp)
+```
+
+---
+
+## Risk Mapping:
+
+| Score     | Risk   |
+| --------- | ------ |
+| 0–0.33    | Low    |
+| 0.34–0.66 | Medium |
+| 0.67–1.0  | High   |
+
+---
+
+# 🔍 6. Explainability Layer
+
+## 6.1 Learned Feature Weights
+
+Expose:
+
+```python id="exp"
+importance_i = ∂score / ∂feature_i
+```
+
+---
+
+## 6.2 Attention-Based Explanation
+
+If using attention:
+
+```python id="attn_exp"
+importance = attention_weights
+```
+
+---
+
+## 6.3 Hybrid Explanation
+
+Combine:
+
+* Neural weights
+* Rule contributions
+
+---
+
+# ⚖️ 7. Hybrid Aggregation (MANDATORY)
+
+## Final Score:
+
+```python id="hybrid"
+final_score = α * neural_score + (1 - α) * rule_score
+```
+
+---
+
+## α Strategies:
+
+### Static:
+
+```python id="static_alpha"
+α = 0.7
+```
+
+### Dynamic:
+
+```python id="dyn_alpha"
+α = confidence_based(model_outputs)
+```
+
+Example:
+
+* High confidence → more neural
+* Low confidence → fallback to rules
+
+---
+
+# 🧪 8. Training Strategy
+
+## 8.1 Supervision
+
+Train aggregator on:
+
+* Ground truth labels (REAL/FAKE)
+* Existing rule-based scores as auxiliary target
+
+---
+
+## 8.2 Loss Function
+
+```python id="loss"
+L = BCE(y_pred, y_true)
+  + λ1 * MSE(neural_score, rule_score)
+  + λ2 * calibration_loss
+```
+
+---
+
+## 8.3 Regularization
+
+* Dropout (0.2–0.3)
+* Weight decay
+* Early stopping on validation AUC
+
+---
+
+# 🚀 9. Deployment Considerations
+
+## Latency
+
+* MLP: negligible (<5ms)
+* Transformer aggregator: +10–30ms
+
+---
+
+## Fallback
+
+If neural fails:
+
+```python id="fallback"
+return rule_score
+```
+
+---
+
+## Versioning
+
+* Keep:
+
+  * `aggregator_v1` (rule)
+  * `aggregator_v2` (hybrid)
+
+---
+
+# 📈 10. Expected Impact
+
+| Area                 | Impact     |
+| -------------------- | ---------- |
+| Credibility accuracy | ↑↑         |
+| Adaptability         | ↑↑         |
+| Feature utilization  | ↑↑         |
+| Interpretability     | maintained |
+| Scalability          | ↑          |
+
+---
+
+# 🔥 Final Principle
+
+> Aggregation is not arithmetic.
+> It is **learned reasoning over heterogeneous signals**.
+
+---
+
+# 🧠 Key Insight
+
+Your current system:
+
+> Signals → weighted sum
+
+Upgraded system:
+
+> Signals → **context-aware reasoning network**
+
+---
+
+# 🚀 Deliverables
+
+Implement:
+
+1. `NeuralAggregator` module
+2. Feature standardization pipeline
+3. Hybrid scoring logic
+4. Explanation extraction
+5. Training script for aggregator
+
+Ensure:
+
+* Compatible with existing pipeline
+* Works in real-time inference
+* Fully interpretable outputs
+
+---
