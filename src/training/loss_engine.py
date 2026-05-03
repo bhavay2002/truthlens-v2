@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Tuple
 
 import torch
@@ -40,41 +40,29 @@ class LossEngineConfig:
     valid_label_indices: Optional[Dict[str, list]] = None
 
     # CFG-5: ``normalization`` selects the reduction strategy used when
-    # combining per-task losses inside ``MultiTaskLoss``:
-    #
-    #   * ``"active"`` (default, recommended for multi-task training) —
-    #     divide the summed weighted losses by the number of tasks that
-    #     produced a non-zero loss this step. Keeps the aggregate scale
-    #     stable when some heads receive no labels in a given batch.
-    #   * ``"sum"`` — keep the raw weighted sum. **Required** for true
-    #     single-task runs (one entry in ``task_types``); otherwise the
-    #     "/ 1" division is a no-op and exporting "sum" makes the metric
-    #     comparable to the loss reported in single-head literature.
-    #     ``LossEngine.__init__`` auto-overrides ``"active"`` -> ``"sum"``
-    #     for single-task configs and emits a warning.
-    #   * ``"mean"`` — same as ``"active"`` but divides by ``len(task_types)``
-    #     regardless of which heads contributed; appropriate when every
-    #     task is expected to be active in every batch.
+    # combining per-task losses inside ``MultiTaskLoss``.
     normalization: str = "active"
     use_normalizer: bool = True
     use_coverage: bool = True
 
-    # NORMALIZER-ALPHA-DAMP: EMA decay forwarded to ``EMALossNormalizer``
-    # inside ``MultiTaskLoss``. Lower → smoother running mean / longer
-    # effective averaging window → quieter per-task normalisation factors
-    # → fewer downstream gradient spikes. ``None`` keeps the
-    # ``EMALossNormalizer`` default (0.1) for back-compat with callers
-    # that don't set it.
+    # NORMALIZER-ALPHA-DAMP: EMA decay forwarded to ``EMALossNormalizer``.
     normalizer_alpha: Optional[float] = None
 
-    # LOSS-3: TrainingStep divides the loss by ``gradient_accumulation_steps``
-    # so the gradient magnitude matches a single big batch. MultiTaskLoss
-    # ALSO divides by ``active_heads``. The two are correct in isolation but
-    # compose multiplicatively, so the effective per-task weight is
-    # ``cfg.weight / (active_heads × grad_accum)``. To preserve the configured
-    # static task weights when grad_accum > 1, pre-scale ``cfg.weight`` by
-    # ``gradient_accumulation_steps`` here.
+    # LOSS-3: gradient accumulation step pre-scaling.
     gradient_accumulation_steps: int = 1
+
+    # ── Semantic alignment upgrades ───────────────────────────────────
+    # Per-task temperature scaling. Dict maps task name → temperature T.
+    # T > 1 softens predictions (e.g. emotion: 1.5, ideology: 1.2).
+    # T < 1 sharpens predictions (e.g. propaganda: 0.8).
+    # Tasks absent from this dict default to T = 1.0 (no-op).
+    task_temperatures: Optional[Dict[str, float]] = None
+
+    # Per-task label smoothing epsilon.
+    # Multiclass tasks: ε = 0.05 recommended.
+    # Multilabel tasks: ε = 0.01 recommended.
+    # Tasks absent from this dict default to ε = 0.0 (disabled).
+    label_smoothing: Optional[Dict[str, float]] = None
 
 
 # =========================================================
@@ -103,6 +91,8 @@ class LossEngine:
         focal_map = config.use_focal or {}
         gamma_map = config.focal_gamma or {}
         valid_idx_map = config.valid_label_indices or {}
+        temp_map = config.task_temperatures or {}
+        smooth_map = config.label_smoothing or {}
 
         for task, task_type in config.task_types.items():
             weight = (config.task_weights or {}).get(task, 1.0)
@@ -119,32 +109,15 @@ class LossEngine:
                 valid_label_indices=(
                     [int(i) for i in valid_idx] if valid_idx else None
                 ),
+                temperature=float(temp_map.get(task, 1.0)),
+                label_smoothing=float(smooth_map.get(task, 0.0)),
             )
 
         # -------------------------------------------------
         # CORE LOSS MODULE
         #
-        # MT-1: ``create_trainer_fn`` builds one Trainer per task, so this
-        # engine is overwhelmingly invoked with a SINGLE task. The full
-        # multi-task plumbing (EMA normalizer, coverage tracker, GradNorm /
-        # uncertainty balancer, ``normalization="active"`` head-count
-        # division) is not just no-op overhead in that regime — it is
-        # actively misleading. Specifically:
-        #   * ``EMALossNormalizer`` rescales the loss by an EMA of itself;
-        #     with one task this is a divide-by-self that flattens the
-        #     gradient signal of the early steps and inflates it later.
-        #   * ``EMACoverageTracker`` multiplies by a running coverage
-        #     ratio that is always 1.0 for one task — pure GPU work.
-        #   * ``normalization="active"`` divides by ``active_heads`` which
-        #     is always 1; harmless but advertises a behaviour that
-        #     doesn't apply.
-        #   * ``attach_balancer`` would silently no-op since balancers
-        #     need >= 2 tasks to balance between.
-        # Force-disable them in the single-task path, log a clear warning,
-        # and reject ``attach_balancer`` so callers can't be fooled into
-        # thinking multi-task balancing is active when it isn't. The full
-        # MultiTaskLoss wiring stays available unchanged for any future
-        # caller that genuinely passes >1 tasks.
+        # MT-1: single-task path disables multi-task plumbing that would
+        # be misleading / actively harmful in that regime.
         # -------------------------------------------------
 
         single_task = len(task_configs) <= 1
@@ -173,17 +146,17 @@ class LossEngine:
             normalization=effective_normalization,
             use_normalizer=effective_use_normalizer,
             use_coverage=effective_use_coverage,
-            # NORMALIZER-ALPHA-DAMP: forward the YAML-tunable EMA alpha
-            # into the normalizer (see LossEngineConfig docstring).
             normalizer_alpha=config.normalizer_alpha,
         )
 
         self._balancer: Optional[BaseBalancer] = None
 
         logger.info(
-            "LossEngine initialized | tasks=%s | norm=%s",
+            "LossEngine initialized | tasks=%s | norm=%s | temps=%s | smoothing=%s",
             list(task_configs.keys()),
             config.normalization,
+            temp_map or "none",
+            smooth_map or "none",
         )
 
     # =====================================================
@@ -192,14 +165,6 @@ class LossEngine:
 
     def attach_balancer(self, balancer: BaseBalancer) -> None:
 
-        # MT-1: balancers (GradNorm / Uncertainty) need >= 2 tasks to
-        # balance between. With one task they're a no-op that still pays
-        # the per-step ``on_before_backward`` autograd-grad cost — and
-        # worse, the caller is led to believe multi-task balancing is
-        # active. Reject loudly so the bug is impossible to ship silently.
-        # This runs BEFORE the BaseBalancer type check so the user gets
-        # the most informative error first (the type check is a generic
-        # contract guard; the single-task check is a specific config bug).
         if self._single_task:
             raise RuntimeError(
                 "MT-1: cannot attach a balancer to a single-task LossEngine; "
@@ -231,15 +196,8 @@ class LossEngine:
         if "labels" not in batch:
             raise RuntimeError("Missing 'labels'")
 
-        # Single-task model classes (BiasClassifier, IdeologyClassifier,
-        # …) emit ``outputs["logits"]`` (a single tensor) rather than the
-        # multi-head ``outputs["task_logits"]`` dict that
-        # MultiTaskTruthLensModel produces. When the LossEngine is
-        # configured with exactly one task, treat the bare ``logits``
-        # tensor as that task's logits and synthesise the ``task_logits``
-        # dict the rest of the engine expects. Multi-task callers MUST
-        # still supply ``task_logits`` — there is no way to disambiguate
-        # a single tensor across multiple heads.
+        # Single-task model classes emit ``outputs["logits"]`` rather than
+        # the multi-head ``outputs["task_logits"]`` dict. Synthesise the dict.
         if "task_logits" not in outputs:
             if "logits" in outputs and len(self.config.task_types) == 1:
                 only_task = next(iter(self.config.task_types.keys()))
@@ -250,45 +208,28 @@ class LossEngine:
         logits = outputs["task_logits"]
         labels = batch["labels"]
 
-        # Single-task collate emits ``labels`` as a bare tensor, but
-        # MultiTaskLoss requires a {task: tensor} dict. Wrap it up using
-        # the only configured task name so the per-task loop matches.
         if not isinstance(labels, dict) and len(self.config.task_types) == 1:
             only_task = next(iter(self.config.task_types.keys()))
             labels = {only_task: labels}
 
+        # ── Task-presence mask (partial supervision) ──────────────────
+        # Extracted from the batch when present (collate now propagates it).
+        # Shape: (B, num_tasks) — 1 where the row has a valid label for task t.
+        task_mask: Optional[torch.Tensor] = batch.get("task_mask", None)
+
         # -------------------------------------------------
-        # CORE LOSS  (BUG-10: forward shared_parameters into the
-        # loss module so GradNorm-style balancers can compute task
-        # gradients. The balancer's on_before_backward hook is
-        # already fired inside MultiTaskLoss.forward — we MUST NOT
-        # invoke it again here, otherwise stateful balancers double-
-        # advance their internal step counters every iteration.)
+        # CORE LOSS
         # -------------------------------------------------
 
         total_loss, task_losses = self.loss_module(
             logits,
             labels,
             shared_parameters=shared_parameters,
+            task_mask=task_mask,
         )
 
         # -------------------------------------------------
-        # NUMERICAL SAFETY
-        #
-        # REC-1: the original layer issued THREE separate ``torch.isfinite``
-        # reductions per step:
-        #   * MultiTaskLoss.forward — once per task (N device-host syncs)
-        #   * LossEngine.compute    — once per task + once aggregate (N+1)
-        #   * TrainingStep.run      — once on the aggregate
-        # That's 2N+2 forced syncs per step for an event that fires at most
-        # a handful of times in an entire run. We now keep ONLY the
-        # ``TrainingStep.run`` check (cheapest boundary — exactly the one
-        # ``skip_nan_loss`` semantics need to honour). NaN propagates
-        # through the aggregation, so any per-task NaN still surfaces there.
-        # -------------------------------------------------
-
-        # -------------------------------------------------
-        # DEBUG ATTACHMENTS (SAFE)
+        # DEBUG ATTACHMENTS
         # -------------------------------------------------
 
         outputs["task_losses"] = {
@@ -297,13 +238,6 @@ class LossEngine:
 
         outputs["total_loss"] = total_loss.detach()
 
-        # REC-2: ``mean_loss`` was a host-side ``.item()`` sync computed every
-        # single step (forces the GPU to drain) and was attached to
-        # ``outputs["loss_stats"]`` — but no consumer ever reads it. Trainer
-        # logs ``raw_loss`` (the total) directly, the tracker logs per-task
-        # losses, and instrumentation has its own EMA. Dropping the
-        # computation removes one full host-device sync per step.
-        # ``num_tasks`` is kept (it's a Python int; no GPU work).
         outputs["loss_stats"] = {
             "num_tasks": len(task_losses),
         }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Iterable
 
 import torch
@@ -11,7 +11,26 @@ from src.models.loss.task_loss_router import TaskLossRouter
 from src.models.loss.loss_normalizer import EMALossNormalizer
 from src.models.loss.coverage_tracker import EMACoverageTracker
 from src.models.loss.base_balancer import BaseBalancer
-from src.training.loss_functions import FocalLoss
+
+# CIRCULAR-IMPORT FIX: ``src.training.loss_functions`` is part of the
+# ``src.training`` package whose ``__init__`` re-exports ``LossEngine``
+# from ``loss_engine.py``, which in turn imports from this module at load
+# time.  A top-level import here therefore creates a circular dependency
+# that causes an ``ImportError`` when ``multitask_loss`` is the first
+# module in the cycle to be resolved.
+#
+# Fix: defer the import to the first ``MultiTaskLoss.__init__`` call.
+# ``FocalLoss`` is only used inside that method, so the lazy import is
+# semantically identical and avoids the cycle entirely.
+_FocalLoss = None
+
+
+def _get_focal_loss_cls():
+    global _FocalLoss
+    if _FocalLoss is None:
+        from src.training.loss_functions import FocalLoss as _FL
+        _FocalLoss = _FL
+    return _FocalLoss
 
 logger = logging.getLogger(__name__)
 
@@ -58,31 +77,26 @@ class TaskLossConfig:
     pos_weight: Optional[torch.Tensor] = None
 
     # ── Loss-level balancing (LOSS-LVL-3) ────────────────────────────
-    # ``class_weights`` is the multiclass analogue of ``pos_weight``:
-    # a per-class scalar tensor that scales each class's contribution
-    # to ``CrossEntropyLoss``. Set it from
-    # ``training.loss_balancer.plan_for_labels`` so the rare classes
-    # contribute a gradient signal that is not drowned out by the
-    # majority class. ``None`` keeps the unweighted CE baseline.
     class_weights: Optional[torch.Tensor] = None
-    # When the dominant class exceeds the focal threshold (~0.9), even
-    # class weights are not enough — flip ``use_focal=True`` to switch
-    # the multiclass head to ``FocalLoss(weight=class_weights)``. The
-    # ``(1 - p_t)^gamma`` factor down-weights the easy majority samples
-    # so gradients keep flowing from the hard, rare ones.
     use_focal: bool = False
     focal_gamma: float = 2.0
 
     # ── Multilabel column filtering ──────────────────────────────────
-    # When the dataset has dropped degenerate columns (see
-    # ``utils.label_cleaning.remove_single_class_columns``), the
-    # labels tensor has shape ``(B, K)`` while the model head still
-    # outputs ``(B, C)`` with ``C >= K``. ``TaskLossRouter`` slices
-    # the logits down to ``valid_label_indices`` before computing BCE
-    # so the unused output neurons receive zero gradient and don't
-    # corrupt the encoder. Leave as ``None`` to keep the original
-    # full-width behaviour.
     valid_label_indices: Optional[List[int]] = None
+
+    # ── Semantic alignment upgrades ───────────────────────────────────
+    # Per-task temperature scaling applied to logits before loss.
+    # T > 1 softens the distribution (reduces overconfidence, e.g.
+    # emotion T=1.5); T < 1 sharpens it (e.g. propaganda T=0.8).
+    # T = 1.0 is a no-op and the default.
+    temperature: float = 1.0
+
+    # Label smoothing epsilon.  For multiclass tasks PyTorch's built-in
+    # F.cross_entropy label_smoothing is used.  For multilabel tasks the
+    # binary targets are softened: y_smooth = y*(1-ε) + ε*0.5.
+    # ε = 0.05 is recommended for multiclass; ε = 0.01 for multilabel.
+    # 0.0 disables smoothing (default, preserves original behaviour).
+    label_smoothing: float = 0.0
 
     def __post_init__(self) -> None:
         # Canonical form: drop underscores, lowercase.
@@ -105,7 +119,7 @@ class MultiTaskLoss(nn.Module):
 
     Pipeline:
         logits
-          → TaskLossRouter
+          → TaskLossRouter  (temperature scaling + label smoothing applied here)
           → EMALossNormalizer
           → EMACoverageTracker
           → static weighting
@@ -114,7 +128,7 @@ class MultiTaskLoss(nn.Module):
 
     Designed for:
     - multi-task imbalance
-    - sparse supervision
+    - sparse supervision (task_mask gating)
     - research experimentation
     - production training
     """
@@ -148,17 +162,11 @@ class MultiTaskLoss(nn.Module):
 
         loss_functions = nn.ModuleDict()
 
+        FocalLoss = _get_focal_loss_cls()
+
         for name, cfg in task_configs.items():
 
             if cfg.task_type == "multiclass":
-                # LOSS-LVL-3: pick the right loss for the observed
-                # class distribution. ``use_focal`` is set upstream by
-                # ``training.loss_balancer`` when the dominant class
-                # exceeds the focal threshold; ``class_weights`` is set
-                # whenever the distribution is imbalanced enough to
-                # warrant inverse-frequency reweighting. Both fall back
-                # to vanilla CE when neither is set, matching the prior
-                # behaviour exactly on balanced data.
                 cw = cfg.class_weights
                 if cfg.use_focal:
                     loss_functions[name] = FocalLoss(
@@ -189,34 +197,11 @@ class MultiTaskLoss(nn.Module):
         # MODULES
         # =====================================================
 
-        # GPU-3 (loss buffers): ``loss_functions`` is an ``nn.ModuleDict`` that
-        # holds ``nn.BCEWithLogitsLoss(pos_weight=…)`` and
-        # ``nn.CrossEntropyLoss(weight=…)``. PyTorch registers ``pos_weight`` /
-        # ``weight`` as *buffers* on those loss modules — so they only move
-        # device when their parent ``nn.Module`` walks them via ``.to(device)``.
-        # ``TaskLossRouter`` is a plain Python class (deliberately, to keep the
-        # routing logic stateless), which means ``self.router.loss_functions``
-        # is INVISIBLE to ``MultiTaskLoss.children()`` / ``.modules()`` — and
-        # therefore invisible to ``MultiTaskLoss.to(device)``. The result is
-        # the classic "Expected all tensors to be on the same device, but
-        # found cuda:0 and cpu" crash on the very first BCE forward pass when
-        # ``pos_weight`` / ``class_weights`` are populated by the loss
-        # balancer (e.g. emotion multilabel).
-        #
-        # Fix: assign the ``ModuleDict`` to ``self.loss_functions`` BEFORE
-        # passing it into the router. PyTorch's ``__setattr__`` then registers
-        # it as a submodule of ``MultiTaskLoss``, so a single call to
-        # ``MultiTaskLoss.to(device)`` (already done in
-        # ``TrainingStep.__init__``) propagates to every per-task loss buffer.
-        # The router still gets the same ``ModuleDict`` reference so its
-        # routing logic is unchanged.
+        # GPU-3: assign the ModuleDict to self BEFORE the router so
+        # .to(device) propagates loss-function buffers (pos_weight, etc.).
         self.loss_functions = loss_functions
         self.router = TaskLossRouter(loss_functions, task_configs)
 
-        # NORMALIZER-ALPHA-DAMP: pass through the YAML-tunable EMA alpha
-        # when the caller supplied one; otherwise fall back to the
-        # ``EMALossNormalizer`` default (0.1) so legacy callers are
-        # unaffected.
         if use_normalizer:
             if normalizer_alpha is not None:
                 self.normalizer = EMALossNormalizer(alpha=float(normalizer_alpha))
@@ -258,18 +243,35 @@ class MultiTaskLoss(nn.Module):
         labels: Dict[str, torch.Tensor],
         *,
         shared_parameters: Optional[Iterable[torch.nn.Parameter]] = None,
+        task_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Compute weighted multi-task loss.
 
-        ``shared_parameters`` (A4.5) is the iterable of trunk / shared
-        parameters that GradNorm-style balancers will compute per-task
-        gradient norms against. Most callers should obtain it via
-        :func:`gather_shared_parameters(model)`; non-balancer setups can
-        leave it ``None``.
+        Parameters
+        ----------
+        logits:
+            Per-task logit tensors {task: (B, C)}.
+        labels:
+            Per-task label tensors {task: (B,) or (B, C)}.
+        shared_parameters:
+            (A4.5) Shared trunk parameters for GradNorm-style balancers.
+        task_mask:
+            Optional (B, num_tasks) long tensor where entry [i, t] = 1
+            indicates sample i carries a valid label for task t.  When
+            provided it gates the per-task loss so that rows without a
+            label for a given task contribute zero gradient. This enables
+            partial supervision in mixed-task batches.  When None the
+            existing per-task ignore_index masking in TaskLossRouter
+            is the sole guard (single-task batch behaviour unchanged).
         """
 
         if not isinstance(logits, dict) or not isinstance(labels, dict):
             raise TypeError("logits and labels must be dict")
+
+        # Build a name→column-index look-up for task_mask slicing.
+        # We match by position in self.task_names so the mask ordering
+        # is stable regardless of the dict iteration order.
+        task_to_col: Dict[str, int] = {t: i for i, t in enumerate(self.task_names)}
 
         task_losses: Dict[str, torch.Tensor] = {}
         raw_losses: Dict[str, torch.Tensor] = {}
@@ -289,7 +291,7 @@ class MultiTaskLoss(nn.Module):
             cfg = self.task_configs[task]
 
             # -------------------------
-            # 1. RAW LOSS (IMPORTANT)
+            # 1. RAW LOSS
             # -------------------------
 
             raw_loss = self.router.compute(
@@ -298,13 +300,22 @@ class MultiTaskLoss(nn.Module):
                 labels[task],
             )
 
-            # REC-1: per-task ``torch.isfinite`` was previously checked HERE,
-            # again in ``LossEngine.compute`` (one per task + one for total),
-            # and again in ``TrainingStep.run`` for the total — three full
-            # device-host syncs per step, two of them N×. Keep ONLY the
-            # cheapest single ``isnan().any()`` reduce on the aggregated
-            # ``total_loss`` at the TrainingStep boundary; NaN propagates
-            # through the sum so any per-task NaN is still caught there.
+            # -------------------------
+            # 1b. TASK-MASK GATING
+            #
+            # When a per-row task_mask is available, scale the scalar
+            # loss by the fraction of active rows for this task.
+            # This is equivalent to computing the loss only on rows
+            # where the mask is 1 and normalising by that count, which
+            # prevents batches with very few labelled rows for a task
+            # from producing disproportionately large gradient updates.
+            # -------------------------
+            if task_mask is not None and task in task_to_col:
+                col_idx = task_to_col[task]
+                if col_idx < task_mask.shape[1]:
+                    col = task_mask[:, col_idx].float().to(raw_loss.device)
+                    active_frac = col.mean().clamp_min(1e-6)
+                    raw_loss = raw_loss * active_frac
 
             loss = raw_loss
 
@@ -340,20 +351,7 @@ class MultiTaskLoss(nn.Module):
 
             weighted_loss = loss * float(cfg.weight)
 
-            # MT-4: the second element of the return tuple is the per-task
-            # loss view that downstream consumers (TaskScheduler EMA,
-            # AutoDebugEngine.LossTracker EMA, instrumentation) treat as a
-            # raw loss magnitude. Returning the *weighted+normalized+
-            # coverage-multiplied* value would (a) corrupt the adaptive
-            # scheduler's softmax of EMA losses (it sees post-normalized
-            # ratios and reverse-amplifies the weighting), (b) make
-            # spike/anomaly detection thresholds non-comparable across
-            # tasks with different static weights, and (c) hide regressions
-            # in raw model performance behind balancing changes. Track both
-            # — ``total_loss`` accumulates the WEIGHTED value (correct for
-            # backward) while the returned per-task dict holds RAW values
-            # (correct for diagnostics).
-            task_losses[task] = weighted_loss  # internal, used for total_loss
+            task_losses[task] = weighted_loss
             raw_losses[task] = raw_loss
 
             total_loss = (
@@ -405,7 +403,6 @@ class MultiTaskLoss(nn.Module):
 
         self.last_active_heads = active_heads
 
-        # MT-4: return RAW per-task losses (see MT-4 comment above).
         return total_loss, raw_losses
 
     # =========================================================

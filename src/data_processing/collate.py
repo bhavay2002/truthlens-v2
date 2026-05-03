@@ -5,6 +5,10 @@ The pad-token id is *not* hardcoded — RoBERTa uses 1, BERT uses 0, etc.
 ``build_collate_fn(pad_token_id=...)`` returns a closure with the correct
 padding value baked in. ``collate_fn`` is the legacy helper kept for
 back-compat (defaults to pad-id 0; suitable for BERT/DeBERTa only).
+
+Propagated fields (when present in every item in the batch):
+  - task_mask       : (B, num_tasks) long tensor — per-row task presence mask
+  - derived_features: (B, 3)  float tensor — cross-task derived supervision signals
 """
 
 from __future__ import annotations
@@ -64,6 +68,19 @@ def _collate(
             if item["task"] != task:
                 raise RuntimeError("Mixed-task batch detected")
     out["task"] = task
+
+    # ----- task_mask (per-row task presence — B x num_tasks) -----
+    # Propagated when every item carries the field so downstream masked-loss
+    # and the TaskPresenceMaskSampler can gate per-row per-task loss.
+    if all("task_mask" in item for item in batch):
+        out["task_mask"] = torch.stack([item["task_mask"] for item in batch])
+
+    # ----- derived_features (cross-task supervision signals — B x 3) -----
+    # emotional_bias_score, propaganda_intensity, ideological_emotion
+    if all("derived_features" in item for item in batch):
+        out["derived_features"] = torch.stack(
+            [item["derived_features"] for item in batch]
+        )
 
     return out
 

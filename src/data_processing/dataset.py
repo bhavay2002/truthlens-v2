@@ -6,6 +6,16 @@ Design:
 - Texts/labels are stored as numpy arrays / lists for O(1) __getitem__ access.
 - Optionally returns offset_mapping for downstream token-alignment / explainability.
 - Label column names come from the data_contracts module (single source of truth).
+
+Semantic alignment additions (Phase 1):
+- task_mask_vector: per-row (num_tasks,) binary mask — 1 where the row has a
+  valid label for that task. Enables partial supervision in mixed batches and
+  powers the TaskPresenceMaskSampler.
+- derived_features: per-row cross-task supervision signals (emotional_bias_score,
+  propaganda_intensity, ideological_emotion) normalised to [0, 1].
+- MultiTaskAlignedDataset: correctly builds per-row task masks based on which
+  label columns are actually non-null for each row, rather than assuming every
+  row in a task-specific split is fully labelled.
 """
 
 from __future__ import annotations
@@ -51,6 +61,49 @@ def _has_any(df: pd.DataFrame, columns: List[str]) -> np.ndarray:
         return np.zeros(len(df), dtype=np.int64)
     mat = df[present].fillna(0).to_numpy(dtype=np.float32)
     return (np.any(mat > 0, axis=1)).astype(np.int64)
+
+
+def _build_per_row_task_mask(df: pd.DataFrame) -> np.ndarray:
+    """Build a (N, len(TASK_ORDER)) binary matrix indicating which tasks
+    have valid (non-null, non-sentinel) labels for each row.
+
+    This is the *per-row* mask used for partial supervision — it differs
+    from the *per-dataset* mask (all-ones for the current task) used by
+    single-task batches. The per-row mask is valuable when rows from
+    multiple datasets are concatenated into a unified corpus where some
+    rows may have bias labels but no emotion labels, etc.
+    """
+    n = len(df)
+    mask = np.zeros((n, len(TASK_ORDER)), dtype=np.int64)
+
+    # bias — single classification label column
+    if "bias_label" in df.columns:
+        valid = df["bias_label"].notna().to_numpy(dtype=np.int64)
+        mask[:, TASK_ORDER.index("bias")] = valid
+
+    # emotion — any of emotion_0..emotion_N present and non-null
+    emotion_cols = [c for c in df.columns if c.startswith("emotion_")]
+    if emotion_cols:
+        any_valid = df[emotion_cols].notna().any(axis=1).to_numpy(dtype=np.int64)
+        mask[:, TASK_ORDER.index("emotion")] = any_valid
+
+    # propaganda — single classification label column
+    if "propaganda_label" in df.columns:
+        valid = df["propaganda_label"].notna().to_numpy(dtype=np.int64)
+        mask[:, TASK_ORDER.index("propaganda")] = valid
+
+    # ideology — single classification label column
+    if "ideology_label" in df.columns:
+        valid = df["ideology_label"].notna().to_numpy(dtype=np.int64)
+        mask[:, TASK_ORDER.index("ideology")] = valid
+
+    # narrative — any of hero/villain/victim present and non-null
+    narrative_cols = [c for c in ("hero", "villain", "victim") if c in df.columns]
+    if narrative_cols:
+        any_valid = df[narrative_cols].notna().any(axis=1).to_numpy(dtype=np.int64)
+        mask[:, TASK_ORDER.index("narrative")] = any_valid
+
+    return mask
 
 
 # =========================================================
@@ -123,13 +176,6 @@ class BaseTextDataset(Dataset):
 
         # =====================================================
         # FLATTEN STORAGE (PERF-D2)
-        #
-        # ~25M Python ints for a 100k × 256 corpus = ~200 MB of pure
-        # CPython object overhead, plus full GC scans, plus a copy
-        # storm whenever a DataLoader worker forks. Storing one
-        # ``int32`` ids array + one ``int64`` offsets array is
-        # ~3-5× lower RSS, ~30% faster ``__getitem__``, and the
-        # arrays are shared by reference across worker forks.
         # =====================================================
         n = len(ids_lists)
         lengths = np.fromiter((len(x) for x in ids_lists), dtype=np.int64, count=n)
@@ -156,10 +202,7 @@ class BaseTextDataset(Dataset):
         else:
             self._om_flat = None
 
-        # truncation diagnostics — use the canonical HuggingFace signal
-        # ``encodings[i].overflowing`` when available (TOK-D2). The old
-        # ``L >= max_length`` heuristic over-counted samples that fit
-        # exactly. Fall back to the heuristic for slow tokenizers.
+        # truncation diagnostics
         if log_truncation:
             n_truncated = 0
             encodings = getattr(enc, "encodings", None)
@@ -182,13 +225,10 @@ class BaseTextDataset(Dataset):
     def __len__(self) -> int:
         return self._n
 
-    # subclasses override __getitem__ — base helper returns the encoded inputs
     def _encoded_inputs(self, idx: int) -> Dict[str, torch.Tensor]:
         s = int(self._offsets[idx])
         e = int(self._offsets[idx + 1])
         item: Dict[str, torch.Tensor] = {
-            # .astype(int64) returns a fresh array; from_numpy then takes
-            # ownership and yields a tensor without a second copy.
             "input_ids": torch.from_numpy(self._ids_flat[s:e].astype(np.int64, copy=True)),
             "attention_mask": torch.from_numpy(self._attn_flat[s:e].astype(np.int64, copy=True)),
         }
@@ -225,10 +265,14 @@ class ClassificationDataset(BaseTextDataset):
         self.label_col = label_col
         self.num_classes = num_classes
         self.task_name = task_name or label_col
+
+        # Per-dataset mask: all rows belong to this task.
         self.task_mask = torch.ones(len(df), dtype=torch.long)
-        self.task_mask_vector = torch.zeros((len(df), len(TASK_ORDER)), dtype=torch.long)
-        if self.task_name in TASK_ORDER:
-            self.task_mask_vector[:, TASK_ORDER.index(self.task_name)] = 1
+
+        # Per-row multi-task mask: reflects which tasks each row is actually
+        # labelled for (relevant when this dataset is merged into a unified corpus).
+        per_row_mask = _build_per_row_task_mask(df)
+        self.task_mask_vector = torch.from_numpy(per_row_mask)
 
         self.derived_features = self._build_derived_features(df)
 
@@ -241,6 +285,12 @@ class ClassificationDataset(BaseTextDataset):
         self._labels = labels.astype(np.int64)
 
     def _build_derived_features(self, df: pd.DataFrame) -> torch.Tensor:
+        """Compute cross-task derived supervision signals (normalised to [0,1]).
+
+        emotional_bias_score  = bias_score  × emotion_intensity
+        propaganda_intensity  = propaganda  × narrative_conflict_score
+        ideological_emotion   = ideology    × dominant_emotion
+        """
         bias = df["bias_label"].fillna(0).astype(float).to_numpy() if "bias_label" in df.columns else np.zeros(len(df))
         emotion_cols = [c for c in df.columns if c.startswith("emotion_")]
         emotion = _safe_series(df, emotion_cols)
@@ -294,10 +344,6 @@ class MultiLabelDataset(BaseTextDataset):
                 f"Missing multilabel columns {missing} (have: {list(df.columns)})"
             )
 
-        # Preserve the contract's full column list so downstream code
-        # that wants to map (sliced position) → (original column name)
-        # — e.g. logging, metrics naming, prediction-time lookup —
-        # can still do so even after degenerate columns are dropped.
         self.original_label_cols = list(label_cols)
         if valid_label_indices is None:
             self.label_cols = list(label_cols)
@@ -313,16 +359,16 @@ class MultiLabelDataset(BaseTextDataset):
             self.valid_label_indices = kept
             self.label_cols = [label_cols[i] for i in kept]
         self.task_name = task_name
+
         self.task_mask = torch.ones(len(df), dtype=torch.long)
-        self.task_mask_vector = torch.zeros((len(df), len(TASK_ORDER)), dtype=torch.long)
-        if self.task_name in TASK_ORDER:
-            self.task_mask_vector[:, TASK_ORDER.index(self.task_name)] = 1
+
+        # Per-row multi-task mask.
+        per_row_mask = _build_per_row_task_mask(df)
+        self.task_mask_vector = torch.from_numpy(per_row_mask)
+
         self.derived_features = self._build_derived_features(df)
 
         if not self.label_cols:
-            # All columns degenerate. Refuse to build a dataset with
-            # zero label width rather than silently producing a model
-            # head that learns nothing.
             raise ValueError(
                 f"{task_name}: no usable multilabel columns after filtering "
                 f"(original={list(label_cols)}, kept_indices={self.valid_label_indices})"
@@ -334,17 +380,6 @@ class MultiLabelDataset(BaseTextDataset):
                 f"NaN values in multilabel columns {self.label_cols} — clean first."
             )
 
-        # EDGE-CASE (audit §9, "non-binary multilabel value e.g. 0.5"):
-        # ``data_validator._validate_multilabel`` rejects fractional
-        # values when ``enforce_binary_multilabel=True``, but ``MultiLabelDataset``
-        # historically stored whatever it was handed and let BCE consume
-        # it as a soft label — an inconsistency that depended on whether
-        # the validator ran in strict mode. Make the policy explicit:
-        # values in the closed [0, 1] interval are accepted (BCE-with-
-        # logits-loss handles them as soft targets); anything outside
-        # that range is a real bug and is rejected here regardless of
-        # validator strictness, so we never silently train on -1 / 1.5
-        # garbage.
         if matrix.size and (matrix.min() < 0.0 or matrix.max() > 1.0):
             bad = ((matrix < 0.0) | (matrix > 1.0)).sum()
             raise ValueError(
@@ -384,7 +419,20 @@ class MultiLabelDataset(BaseTextDataset):
         return item
 
 
+# =========================================================
+# MULTI-TASK ALIGNED DATASET
+# =========================================================
+
 class MultiTaskAlignedDataset(Dataset):
+    """Unified dataset mixing rows from multiple task-specific DataFrames.
+
+    Each row may carry labels for one or more tasks. The per-row
+    ``task_mask`` reflects which tasks actually have non-null labels for
+    that row — NOT which dataset slice it came from. This is the key
+    difference from the per-dataset all-ones mask: it enables the
+    TaskPresenceMaskSampler and the MultiTaskLoss task-mask gating to
+    correctly handle partial supervision in mixed batches.
+    """
 
     def __init__(self, frames: Dict[str, pd.DataFrame]):
         self.frames = frames
@@ -394,9 +442,14 @@ class MultiTaskAlignedDataset(Dataset):
         self._build_masks()
 
     def _build_masks(self) -> None:
-        self.task_mask = torch.zeros((len(self.df), len(self.tasks)), dtype=torch.long)
-        for i, task in enumerate(self.tasks):
-            self.task_mask[:, i] = 1 if task in self.frames else 0
+        """Build per-row task masks from the actual label columns present in each row."""
+        # Use the label-aware helper so rows with null labels for a task
+        # get mask=0 for that task even if they came from that task's split.
+        per_row = _build_per_row_task_mask(self.df)
+
+        # Restrict to columns that correspond to the tasks present in this dataset.
+        task_indices = [TASK_ORDER.index(t) for t in self.tasks]
+        self.task_mask = torch.from_numpy(per_row[:, task_indices])
 
     def __len__(self) -> int:
         return len(self.df)

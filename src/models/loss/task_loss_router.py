@@ -5,6 +5,7 @@ from typing import Dict, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 # CIRCULAR-IMPORT FIX: ``multitask_loss`` imports ``TaskLossRouter`` from this
 # module at module-load time. Importing ``TaskLossConfig`` from ``multitask_loss``
@@ -28,12 +29,29 @@ class TaskLossRouter:
     - routes task → correct loss function
     - handles dtype/device alignment
     - handles masking (ignore_index)
+    - applies per-task temperature scaling to logits
+    - applies per-task label smoothing to targets
     - returns raw (unweighted, unnormalized) loss
 
     It does NOT:
     - normalize loss
     - apply task weights
     - apply balancing (GradNorm / uncertainty)
+
+    Temperature scaling
+    -------------------
+    Logits are divided by ``cfg.temperature`` before any loss computation.
+    T > 1 softens the predicted distribution (reduces overconfidence —
+    recommended for emotion, ideology). T < 1 sharpens it (recommended for
+    clean binary tasks such as propaganda). T = 1.0 is a no-op.
+
+    Label smoothing
+    ---------------
+    For multiclass tasks: PyTorch's built-in ``F.cross_entropy``
+    ``label_smoothing`` parameter is used (available since PyTorch 1.10).
+    For multilabel tasks: binary targets are soft-blended toward 0.5:
+        y_smooth = y * (1 - ε) + ε * 0.5
+    ``cfg.label_smoothing = 0.0`` disables smoothing entirely (default).
     """
 
     def __init__(
@@ -94,6 +112,13 @@ class TaskLossRouter:
         # AMP safety
         logits = logits.float()
 
+        # ── Temperature scaling ──────────────────────────────────────
+        # Apply BEFORE loss so the gradient magnitude is also scaled.
+        # cfg.temperature defaults to 1.0 (no-op).
+        temperature = float(getattr(cfg, "temperature", 1.0))
+        if temperature != 1.0 and temperature > 0.0:
+            logits = logits / temperature
+
         # route (TaskLossConfig normalises to canonical form: no underscores)
         if cfg.task_type == "multiclass":
             return self._multiclass_loss(task_name, logits, labels, cfg, loss_fn)
@@ -134,9 +159,32 @@ class TaskLossRouter:
         if not bool(valid.any()):
             return self._zero_loss(logits)
 
-        loss = loss_fn(logits, labels)
+        # ── Label smoothing for multiclass ───────────────────────────
+        # When smoothing is active we bypass the pre-built loss_fn (which
+        # has no label_smoothing param baked in) and call F.cross_entropy
+        # directly so the smoothing coefficient is applied correctly.
+        # FocalLoss does not support label_smoothing natively; we fall
+        # back to the module for that case.
+        eps = float(getattr(cfg, "label_smoothing", 0.0))
+        is_focal = getattr(loss_fn, "gamma", None) is not None  # FocalLoss sentinel
 
-        return loss.mean()
+        if eps > 0.0 and not is_focal:
+            cw = getattr(loss_fn, "weight", None)
+            if cw is not None:
+                cw = cw.to(logits.device)
+            loss = F.cross_entropy(
+                logits,
+                labels,
+                weight=cw,
+                ignore_index=cfg.ignore_index,
+                label_smoothing=eps,
+            )
+        else:
+            loss = loss_fn(logits, labels)
+
+        # CrossEntropyLoss / FocalLoss already reduce to scalar; .mean()
+        # of a scalar is a no-op but kept for shape safety.
+        return loss.mean() if loss.dim() > 0 else loss
 
     def _binary_loss(
         self,
@@ -155,6 +203,11 @@ class TaskLossRouter:
         if labels.dim() == 1:
             labels = labels.unsqueeze(1)
 
+        # ── Label smoothing for binary ───────────────────────────────
+        eps = float(getattr(cfg, "label_smoothing", 0.0))
+        if eps > 0.0:
+            labels = labels * (1.0 - eps) + eps * 0.5
+
         loss = loss_fn(logits, labels)
 
         return loss.mean()
@@ -170,12 +223,7 @@ class TaskLossRouter:
 
         labels = labels.float()
 
-        # When the dataset has dropped degenerate columns (all-0 or all-1
-        # in the train split), the model head still emits the full-width
-        # logits — slice them down to the surviving columns so they match
-        # the reduced labels and the (already-reduced) ``pos_weight``
-        # tensor inside ``loss_fn``. The dropped logit columns receive
-        # zero gradient and therefore stop poisoning the shared encoder.
+        # Slice logits down to surviving columns (degenerate-column filtering).
         valid_idx = cfg.valid_label_indices
         if valid_idx is not None and len(valid_idx) != logits.shape[-1]:
             if logits.shape[-1] < max(valid_idx) + 1:
@@ -195,7 +243,6 @@ class TaskLossRouter:
             )
 
         ignore_index = float(cfg.ignore_index)
-
         valid_mask = labels.ne(ignore_index)
 
         if not bool(valid_mask.any()):
@@ -207,8 +254,16 @@ class TaskLossRouter:
             torch.zeros_like(labels),
         )
 
-        raw_loss = loss_fn(logits, safe_labels)
+        # ── Label smoothing for multilabel ───────────────────────────
+        # Soft-blend binary targets toward 0.5 (midpoint): this prevents
+        # the model from becoming over-confident on noisy weak labels.
+        # Only applied to valid (non-masked) entries.
+        eps = float(getattr(cfg, "label_smoothing", 0.0))
+        if eps > 0.0:
+            smooth_labels = safe_labels * (1.0 - eps) + eps * 0.5
+            safe_labels = torch.where(valid_mask, smooth_labels, safe_labels)
 
+        raw_loss = loss_fn(logits, safe_labels)
         masked_loss = raw_loss * valid_mask.to(raw_loss.dtype)
 
         return masked_loss.sum() / valid_mask.sum().clamp_min(1)
@@ -233,9 +288,7 @@ class TaskLossRouter:
     # =========================================================
 
     def _zero_loss(self, logits: torch.Tensor) -> torch.Tensor:
-        """
-        Return gradient-safe zero loss.
-        """
+        """Return gradient-safe zero loss."""
         if logits.requires_grad:
             return logits.sum() * 0.0
         return torch.zeros((), requires_grad=False)

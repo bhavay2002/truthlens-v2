@@ -1,0 +1,199 @@
+### 🧠 Prompt: Upgrade Dataset to Semantically Aligned Multi-Task Format
+
+You are a senior ML engineer working on a **multi-task misinformation detection system (TruthLens AI)** with tasks: bias, emotion, propaganda, ideology, and narrative analysis.
+
+The current dataset is **column-aligned but not semantically aligned**, meaning:
+
+* Different datasets contribute to different tasks
+* Many rows have **missing labels for some tasks**
+* This leads to **sparse supervision and noisy gradients**
+
+Your task is to redesign the dataset pipeline to support **true multi-task learning with partial supervision and cross-task alignment**.
+
+---
+
+## 🔷 Step 1: Introduce Task Presence Mask
+
+Modify the unified dataset schema to include a `task_mask` for each task.
+
+### Requirements:
+
+* For every row, create a binary indicator per task:
+
+```python
+task_mask = {
+  "bias": 1 if bias_label exists else 0,
+  "emotion": 1 if any emotion_i exists else 0,
+  "propaganda": 1 if propaganda_label exists else 0,
+  "ideology": 1 if ideology_label exists else 0,
+  "narrative": 1 if any narrative labels exist else 0
+}
+```
+
+### Implementation Notes:
+
+* Store as:
+
+  * Either separate columns (`mask_bias`, `mask_emotion`, …)
+  * Or a vector tensor in dataset class
+* Ensure this mask is passed into the model during training
+
+### Objective:
+
+* Prevent loss computation for missing labels
+* Enable **partial supervision learning**
+
+---
+
+## 🔷 Step 2: Enable Masked Loss Computation
+
+Modify training loop:
+
+```python
+loss_task = criterion(pred, target)
+masked_loss = task_mask * loss_task
+```
+
+### Requirements:
+
+* Loss for a task should only be computed if `task_mask == 1`
+* Normalize loss by number of active tasks per batch
+
+```python
+L_total = sum(masked_losses) / sum(task_masks)
+```
+
+---
+
+## 🔷 Step 3: Cross-Task Label Alignment (Derived Features)
+
+Create **new derived supervision signals** using existing labels.
+
+### Add the following features:
+
+| Feature Name         | Definition                                  |
+| -------------------- | ------------------------------------------- |
+| emotional_bias_score | bias_score × emotion_intensity              |
+| propaganda_intensity | propaganda_label × narrative_conflict_score |
+| ideological_emotion  | ideology_class × dominant_emotion           |
+
+### Implementation:
+
+* Compute during preprocessing or feature engineering stage
+* Normalize all derived features to `[0, 1]`
+* Store in dataset as additional columns
+
+### Objective:
+
+* Inject **cross-task relationships**
+* Improve shared representation learning
+
+---
+
+## 🔷 Step 4: Normalize Label Distributions
+
+Handle imbalance across tasks.
+
+### 4.1 Class Reweighting
+
+* Compute class frequencies per task
+* Apply inverse-frequency weights in loss
+
+```python
+weight_c = 1 / log(freq_c + ε)
+```
+
+---
+
+### 4.2 Label Smoothing
+
+Apply to classification tasks:
+
+```python
+y_smooth = y * (1 - ε) + ε / num_classes
+```
+
+Recommended:
+
+* ε = 0.05 for multi-class
+* ε = 0.01 for multi-label
+
+---
+
+### 4.3 Temperature Scaling (per task)
+
+Before softmax/sigmoid:
+
+```python
+logits = logits / T_task
+```
+
+Where:
+
+* Emotion → T = 1.5 (reduce overconfidence)
+* Propaganda → T = 0.8 (sharpen signal)
+* Ideology → T = 1.2
+
+---
+
+## 🔷 Step 5: Task-Balanced Sampling
+
+Modify DataLoader:
+
+* Ensure each batch contains:
+
+  * Samples with bias labels
+  * Samples with emotion labels
+  * Mixed samples
+
+### Strategy:
+
+* Use weighted sampling based on task presence
+* Avoid batches dominated by a single task
+
+---
+
+## 🔷 Step 6: Validation Adjustments
+
+* Evaluate metrics **only on rows where task_mask == 1**
+* Track:
+
+  * Per-task performance
+  * Cross-task consistency metrics
+
+---
+
+## 🔷 Final Goal
+
+Transform dataset from:
+
+> ❌ Loosely merged multi-source data
+
+into:
+
+> ✅ Semantically aligned multi-task dataset with:
+
+* Task-aware supervision
+* Cross-task signals
+* Balanced learning dynamics
+
+This should directly improve:
+
+* Model stability
+* Multi-task performance
+* Representation quality
+* Generalization across misinformation patterns
+
+---
+
+## 🔥 Output Requirements
+
+Provide:
+
+1. Updated dataset schema
+2. Modified dataset class (PyTorch)
+3. Updated training loop with masked loss
+4. Preprocessing pipeline changes
+5. Example batch structure with task masks
+
+Ensure code is production-ready and scalable.
