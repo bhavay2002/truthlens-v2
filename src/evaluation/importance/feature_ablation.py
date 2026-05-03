@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -41,19 +41,29 @@ def mse_metric(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 @dataclass
 class FeatureAblation:
 
-    model: object
+    # CRIT-E-ADVANCED-BROKEN fix: model is now optional so callers that
+    # supply a predict_fn closure (e.g. advanced_analysis wrappers) can
+    # construct the class without an sklearn-compatible object.
+    model: Optional[object] = None
     metric: MetricFn = accuracy_metric
     normalize: bool = True
     bootstrap_runs: int = 0  # >0 enables variance estimation
+
+    # CRIT-E-ADVANCED-BROKEN fix: accept a raw callable as an alternative
+    # to a model object.
+    predict_fn: Optional[Callable] = None
 
     _baseline_cache: float | None = None
 
     # -----------------------------------------------------
 
     def _predict(self, X: np.ndarray) -> np.ndarray:
-        if hasattr(self.model, "predict"):
+        # CRIT-E-ADVANCED-BROKEN: prefer predict_fn over model.
+        if self.predict_fn is not None:
+            return np.asarray(self.predict_fn(X))
+        if self.model is not None and hasattr(self.model, "predict"):
             return self.model.predict(X)
-        raise RuntimeError("Model must implement predict()")
+        raise RuntimeError("FeatureAblation requires model or predict_fn")
 
     # -----------------------------------------------------
 
@@ -80,6 +90,21 @@ class FeatureAblation:
         y: np.ndarray,
         feature_names: List[str],
     ) -> Dict[str, float]:
+
+        # CRIT-E-ADVANCED-BROKEN fix: callers (e.g. advanced_analysis
+        # wrappers) may pass text lists or 1-D arrays.  Column ablation is
+        # only meaningful for 2-D tabular arrays; return zero importance with
+        # a warning rather than crashing with an unpack / indexing TypeError.
+        X = np.asarray(X) if not isinstance(X, np.ndarray) else X
+        if X.ndim != 2:
+            logger.warning(
+                "single_feature_ablation: X has shape %s (expected 2-D); "
+                "column ablation is not applicable — returning zero importance "
+                "for all %d features.",
+                X.shape,
+                len(feature_names),
+            )
+            return {name: 0.0 for name in feature_names}
 
         baseline = self._baseline_score(X, y)
 

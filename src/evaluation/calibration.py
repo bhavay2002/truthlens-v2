@@ -355,14 +355,13 @@ def compute_calibration(
     if task_type == "multilabel":
         results.update(multilabel_ece(y_true_arr, probs, n_bins))
     elif task_type == "binary":
-        if probs.ndim == 2 and probs.shape[1] == 2:
-            results["ece"] = expected_calibration_error(
-                y_true_arr, probs, n_bins, task_type="binary"
-            )
-        else:
-            results["ece"] = expected_calibration_error(
-                y_true_arr, probs, n_bins, task_type="binary"
-            )
+        # DRY-E-CALIBRATION-IF fix: the previous if/else had identical bodies
+        # in both branches (sigmoid of binary logits always produces 1-D
+        # probs so the ndim==2 branch was dead code).  Collapse to one call;
+        # expected_calibration_error already handles both shapes internally.
+        results["ece"] = expected_calibration_error(
+            y_true_arr, probs, n_bins, task_type="binary"
+        )
     else:  # multiclass
         results["ece"] = expected_calibration_error(
             y_true_arr, probs, n_bins, task_type="multiclass"

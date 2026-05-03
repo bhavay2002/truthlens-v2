@@ -404,8 +404,19 @@ def run_evaluation_pipeline(
 
         if enable_uncertainty:
             try:
+                # HIGH-E-PIPELINE-PROBS fix: binary tasks yield 1-D probs
+                # (P(class=1) per sample).  uncertainty_statistics requires a
+                # 2-D matrix; reshape before passing so the call succeeds
+                # instead of raising ValueError that is silently swallowed,
+                # which caused the entire uncertainty block to be absent for
+                # every binary task.
+                probs_for_unc = np.asarray(probs)
+                if probs_for_unc.ndim == 1 and probs_for_unc.size > 0:
+                    probs_for_unc = np.column_stack(
+                        [1.0 - probs_for_unc, probs_for_unc]
+                    )
                 unc = uncertainty_statistics(
-                    np.asarray(probs), task=task, logits=logits
+                    probs_for_unc, task=task, logits=logits
                 )
                 report.setdefault("uncertainty", {})[task] = unc
                 mean_entropy = unc.get("mean_entropy")

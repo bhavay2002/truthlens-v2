@@ -239,13 +239,17 @@ def ablation_importance(
 
     from src.evaluation.importance.feature_ablation import FeatureAblation
 
-    ablator = FeatureAblation(metric=metric)
+    # CRIT-E-ADVANCED-BROKEN fix: supply predict_fn on the instance (now an
+    # accepted field); remove the invalid predict_fn kwarg that single_feature_
+    # ablation never accepted.  When X is a list of strings the method emits a
+    # warning and returns zero importance (tabular column ablation does not
+    # apply to raw text).
+    ablator = FeatureAblation(predict_fn=predict_fn, metric=metric)
 
     return ablator.single_feature_ablation(
         X=texts,
         y=y,
         feature_names=feature_names,
-        predict_fn=predict_fn,
     )
 
 
@@ -279,14 +283,19 @@ def permutation_importance(
 
     from src.evaluation.importance.permutation_importance import PermutationImportance
 
-    perm = PermutationImportance(metric=metric)
+    # CRIT-E-ADVANCED-BROKEN fix: predict_fn and n_repeats belong on the
+    # instance, not as kwargs to compute().  model is now optional so the
+    # dataclass can be instantiated without one.
+    perm = PermutationImportance(
+        predict_fn=predict_fn,
+        metric=metric,
+        n_repeats=n_repeats,
+    )
 
     return perm.compute(
         X=texts,
         y=y,
         feature_names=feature_names,
-        predict_fn=predict_fn,
-        n_repeats=n_repeats,
     )
 
 
@@ -319,6 +328,9 @@ def shap_importance(
 
     from src.evaluation.importance.shap_importance import ShapImportance
 
+    # CRIT-E-ADVANCED-BROKEN fix: model is now optional; compute_with_function
+    # is the correct entry point when the caller has a predict_fn closure
+    # rather than an sklearn-compatible model object.
     shap_calc = ShapImportance()
 
     return shap_calc.compute_with_function(

@@ -40,7 +40,7 @@ def mse_metric(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 @dataclass
 class PermutationImportance:
 
-    model: object
+    model: Optional[object] = None
     metric: MetricFn = accuracy_metric
 
     n_repeats: int = 5
@@ -49,19 +49,28 @@ class PermutationImportance:
     normalize: bool = True
     use_proba: bool = False
 
+    # CRIT-E-ADVANCED-BROKEN fix: accept a raw callable so callers that don't
+    # have an sklearn-style model object can still use this class.
+    predict_fn: Optional[Callable] = None
+
     _baseline_cache: Optional[float] = None
 
     # -----------------------------------------------------
 
     def _predict(self, X: np.ndarray) -> np.ndarray:
+        # CRIT-E-ADVANCED-BROKEN: prefer predict_fn over model so callers
+        # that supply a closure (e.g. advanced_analysis wrappers) don't need
+        # to wrap it in an sklearn-compatible object.
+        if self.predict_fn is not None:
+            return np.asarray(self.predict_fn(X))
 
         if self.use_proba and hasattr(self.model, "predict_proba"):
             return self.model.predict_proba(X)
 
-        if hasattr(self.model, "predict"):
+        if self.model is not None and hasattr(self.model, "predict"):
             return self.model.predict(X)
 
-        raise RuntimeError("Model must implement predict()")
+        raise RuntimeError("PermutationImportance requires model or predict_fn")
 
     # -----------------------------------------------------
 
@@ -107,22 +116,22 @@ class PermutationImportance:
 
             col = X[:, j].copy()
 
-            for _ in range(self.n_repeats):
+            # MED-E-PERM-MUTATION fix: use try/finally so the original column
+            # is always restored even if the metric or predict call raises.
+            try:
+                for _ in range(self.n_repeats):
 
-                shuffled = rng.permutation(col)
+                    X[:, j] = rng.permutation(col)
 
-                X[:, j] = shuffled
+                    pred = self._predict(X)
+                    score = self.metric(y, pred)
 
-                pred = self._predict(X)
-                score = self.metric(y, pred)
+                    if not np.isfinite(score):
+                        raise ValueError(f"Invalid score for feature {name}")
 
-                if not np.isfinite(score):
-                    raise ValueError(f"Invalid score for feature {name}")
-
-                scores.append(baseline - score)
-
-            # restore original column
-            X[:, j] = col
+                    scores.append(baseline - score)
+            finally:
+                X[:, j] = col
 
             mean_imp = float(np.mean(scores))
 
@@ -155,16 +164,19 @@ class PermutationImportance:
             scores = []
             col = X[:, j].copy()
 
-            for _ in range(self.n_repeats):
+            # MED-E-PERM-MUTATION fix: guarantee the column is restored even
+            # if _predict or the metric raises mid-loop.
+            try:
+                for _ in range(self.n_repeats):
 
-                X[:, j] = rng.permutation(col)
+                    X[:, j] = rng.permutation(col)
 
-                pred = self._predict(X)
-                score = self.metric(y, pred)
+                    pred = self._predict(X)
+                    score = self.metric(y, pred)
 
-                scores.append(baseline - score)
-
-            X[:, j] = col
+                    scores.append(baseline - score)
+            finally:
+                X[:, j] = col
 
             arr = np.array(scores)
 
@@ -210,17 +222,20 @@ class PermutationImportance:
 
             original = X[:, indices].copy()
 
-            for _ in range(self.n_repeats):
+            # MED-E-PERM-MUTATION fix: guarantee the group columns are
+            # restored even if predict or metric raises.
+            try:
+                for _ in range(self.n_repeats):
 
-                for idx in indices:
-                    X[:, idx] = rng.permutation(X[:, idx])
+                    for idx in indices:
+                        X[:, idx] = rng.permutation(X[:, idx])
 
-                pred = self._predict(X)
-                score = self.metric(y, pred)
+                    pred = self._predict(X)
+                    score = self.metric(y, pred)
 
-                scores.append(baseline - score)
-
-            X[:, indices] = original
+                    scores.append(baseline - score)
+            finally:
+                X[:, indices] = original
 
             val = float(np.mean(scores))
 

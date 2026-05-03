@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from src.features.base.numerics import EPS
@@ -37,7 +37,9 @@ except Exception:
 @dataclass
 class ShapImportance:
 
-    model: object
+    # CRIT-E-ADVANCED-BROKEN fix: model is now optional; callers that rely
+    # on compute_with_function supply a predict_fn instead of a model object.
+    model: Optional[object] = None
     max_samples: Optional[int] = 1000
     batch_size: int = 128
     random_seed: int = 42
@@ -55,7 +57,16 @@ class ShapImportance:
         if not SHAP_AVAILABLE:
             raise RuntimeError("SHAP required")
 
-        # 🔥 Smart selection
+        # CRIT-E-ADVANCED-BROKEN fix: model is now Optional; guard before
+        # attribute access so ShapImportance() / ShapImportance(model=None)
+        # doesn't crash here — callers should use compute_with_function when
+        # they have only a predict_fn and no model object.
+        if self.model is None:
+            raise RuntimeError(
+                "ShapImportance.model is None; use compute_with_function "
+                "to pass a predict_fn instead of a model object."
+            )
+
         if hasattr(self.model, "predict_proba"):
             try:
                 return shap.TreeExplainer(self.model)
@@ -187,6 +198,63 @@ class ShapImportance:
             name: float(score)
             for name, score in zip(feature_names, mean_vals)
         }
+
+    # -----------------------------------------------------
+    # CRIT-E-ADVANCED-BROKEN fix: entry point for callers that supply a
+    # predict_fn closure instead of an sklearn-compatible model object.
+    # advanced_analysis.shap_importance() calls this method.
+    # -----------------------------------------------------
+
+    def compute_with_function(
+        self,
+        predict_fn: Callable,
+        X,
+        feature_names: Optional[List[str]] = None,
+    ) -> Dict[str, float]:
+        """Compute SHAP importance using an external predict_fn.
+
+        Temporarily installs ``predict_fn`` wrapped in a thin sklearn-
+        compatible adapter so the regular ``compute`` path can be reused.
+        When ``X`` is not a 2-D numeric array (e.g. a list of strings),
+        SHAP column-level attribution is not applicable; the method returns
+        zero importance for all features and logs a warning.
+
+        Args:
+            predict_fn: callable(X) -> ndarray of predictions / probabilities.
+            X: feature matrix or raw inputs.
+            feature_names: column labels.  Auto-generated when ``None`` and
+                ``X`` is a 2-D array; an empty list is used for non-tabular
+                inputs.
+        """
+        arr = np.asarray(X) if not isinstance(X, np.ndarray) else X
+        if arr.ndim != 2:
+            logger.warning(
+                "compute_with_function: X has shape %s (expected 2-D); "
+                "SHAP attribution is not applicable to non-tabular inputs — "
+                "returning zero importance.",
+                arr.shape,
+            )
+            return {name: 0.0 for name in (feature_names or [])}
+
+        names = feature_names or [f"feature_{i}" for i in range(arr.shape[1])]
+
+        # Install a thin adapter so _create_explainer / _get_explainer work.
+        class _Adapter:
+            def predict(self_, a: np.ndarray) -> np.ndarray:  # noqa: N805
+                return np.asarray(predict_fn(a))
+
+            def predict_proba(self_, a: np.ndarray) -> np.ndarray:  # noqa: N805
+                return np.asarray(predict_fn(a)).astype(float)
+
+        saved_model = self.model
+        saved_explainer = self._explainer
+        try:
+            self.model = _Adapter()
+            self._explainer = None
+            return self.compute(arr, names)
+        finally:
+            self.model = saved_model
+            self._explainer = saved_explainer
 
     # -----------------------------------------------------
     # VARIANCE (RESEARCH)

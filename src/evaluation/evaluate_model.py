@@ -27,20 +27,6 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# ACTIVATIONS
-# =========================================================
-
-def _softmax(x: np.ndarray) -> np.ndarray:
-    x = x - np.max(x, axis=1, keepdims=True)
-    e = np.exp(x)
-    return e / (np.sum(e, axis=1, keepdims=True) + 1e-12)
-
-
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-x))
-
-
-# =========================================================
 # TOKENIZATION
 # =========================================================
 
