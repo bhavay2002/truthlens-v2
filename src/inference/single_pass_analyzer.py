@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -43,6 +44,21 @@ except ImportError:
     torch = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+# SPA-AMP-DTYPE: the rest of the inference layer reads TRUTHLENS_AMP_DTYPE to
+# decide between bf16 and fp16 (DEV-2). Hardcoding float16 here would overflow
+# tail-class logits for models trained under bf16, and mismatches the dtype
+# resolution used by InferenceEngine and PredictionPipeline.
+def _resolve_amp_dtype():
+    if torch is None:
+        return None
+    requested = (os.environ.get("TRUTHLENS_AMP_DTYPE") or "float16").lower()
+    if requested in ("bf16", "bfloat16"):
+        return torch.bfloat16
+    if requested in ("fp16", "float16", "half"):
+        return torch.float16
+    return torch.float32
 
 
 # =========================================================
@@ -190,9 +206,15 @@ class SinglePassAnalyzer:
     def _forward(self, encoded: Dict[str, Any]) -> Dict[str, Any]:
         """Run the model forward pass once and return raw outputs."""
         ctx = torch.no_grad() if torch is not None else _nullctx()
+        # SPA-AMP-DTYPE: use the env-driven dtype (bf16/fp16/fp32) so this
+        # path stays in lockstep with InferenceEngine and PredictionPipeline.
+        _amp_dtype = _resolve_amp_dtype()
         amp_ctx = (
-            torch.autocast(device_type=self.device.type, dtype=torch.float16)
-            if self.config.amp and self.device is not None and self.device.type == "cuda"
+            torch.autocast(device_type=self.device.type, dtype=_amp_dtype)
+            if self.config.amp
+            and self.device is not None
+            and self.device.type == "cuda"
+            and _amp_dtype is not None
             else _nullctx()
         )
         with ctx, amp_ctx:

@@ -138,6 +138,13 @@ def main():
 
             for task, out in outputs.items():
 
+                # RUN-META-GUARD: InferenceEngine.predict_for_evaluation returns
+                # a ``"_meta"`` scratch key alongside per-task entries. Iterating
+                # without this guard would call out["logits"] on
+                # {"texts": [...]} and raise KeyError on every evaluation run.
+                if not isinstance(out, dict) or "logits" not in out:
+                    continue
+
                 logits = out["logits"]
                 probs = out["probabilities"]
 

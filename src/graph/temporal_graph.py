@@ -260,7 +260,14 @@ class TemporalGraphAnalyzer:
         # the metric is meaningful — below that we report ``0.0``
         # ("insufficient data") to match the 1-sentence branch.
         if shift_arr.size >= 2:
-            temporal_consistency = float(1.0 - narrative_volatility)
+            # TEMPORAL-CONSISTENCY-CLAMP: narrative_volatility is the
+            # variance of Jaccard distances, which can exceed 1.0 for
+            # highly heterogeneous shift sequences. Without the clamp,
+            # temporal_consistency goes negative, violating the [0,1]
+            # contract consumed by the aggregation pipeline's weighted sum.
+            temporal_consistency = float(
+                max(0.0, min(1.0, 1.0 - narrative_volatility))
+            )
         else:
             temporal_consistency = 0.0
 

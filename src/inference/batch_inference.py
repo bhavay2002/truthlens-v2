@@ -182,11 +182,15 @@ class BatchInferenceEngine:
                 "emotion": emotion_val,
             }
 
+            # BATCH-REPORT-FIX: previous call passed kwargs (bias_analysis,
+            # emotion_analysis, credibility_score) that do not exist on
+            # ReportGenerator.generate_report (keyword-only signature uses
+            # ``analysis``, ``predictions``, etc.). Any batch run would raise
+            # TypeError. Pass the per-item prediction dict under ``predictions``
+            # so the report schema receives a coherent payload.
             report = self.report_generator.generate_report(
                 article_text=text,
-                bias_analysis={"bias": bias_val},
-                emotion_analysis={"emotion": emotion_val},
-                credibility_score=None,
+                predictions=preds,
             )
 
             results.append({
