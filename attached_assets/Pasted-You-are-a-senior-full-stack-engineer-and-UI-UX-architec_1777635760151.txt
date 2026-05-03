@@ -1,0 +1,156 @@
+You are a senior full-stack engineer and UI/UX architect.
+
+I have built a machine learning model and backend system. Your job is to analyze the system and generate a complete frontend design and implementation specification.
+
+I will provide details about:
+
+* Model inputs
+* Model outputs
+* APIs
+* Pipelines (inference, aggregation, explainability, evaluation)
+* Data formats
+
+Your task is to produce a COMPLETE frontend plan.
+
+---
+
+### 🔹 1. Understand the System
+
+First, summarize:
+
+* What the model does
+* What problem it solves
+* What type of users will use it
+
+---
+
+### 🔹 2. Input Handling (Frontend Forms)
+
+Describe:
+
+* What inputs the frontend should collect
+* Input types (text, file, dropdown, etc.)
+* Validation rules
+* Example inputs
+
+---
+
+### 🔹 3. API Integration Layer
+
+For each API endpoint, define:
+
+* Endpoint URL
+* Request method (GET/POST)
+* Request body format
+* Response format (JSON structure)
+* Error handling
+
+---
+
+### 🔹 4. Output Visualization
+
+Design how to display:
+
+* Model predictions
+* Confidence scores
+* Labels (e.g., emotions, categories)
+* Aggregated results
+* Explainability outputs
+
+Include:
+
+* Charts (bar, pie, heatmap)
+* Tables
+* Highlighted text explanations
+
+---
+
+### 🔹 5. Explainability UI
+
+Explain how to visualize:
+
+* Feature importance
+* Attention weights
+* Token-level explanations
+
+---
+
+### 🔹 6. User Flow
+
+Define complete flow:
+
+1. User input
+2. API call
+3. Loading state
+4. Result display
+5. Error handling
+
+---
+
+### 🔹 7. Pages / Components
+
+Break frontend into:
+
+* Pages (Home, Results, Dashboard, etc.)
+* Components (InputBox, ResultCard, ChartPanel, etc.)
+
+---
+
+### 🔹 8. Tech Stack Recommendation
+
+Suggest:
+
+* Framework (React / Next.js)
+* UI library (Tailwind / Material UI)
+* Chart library
+* State management
+
+---
+
+### 🔹 9. Performance Considerations
+
+Include:
+
+* Loading optimization
+* API latency handling
+* Caching strategies
+
+---
+
+### 🔹 10. Sample UI Layout
+
+Provide a rough layout structure like:
+Header
+Input Section
+Submit Button
+Loader
+Results Section (charts + text)
+
+---
+
+### 🔹 11. Example Code (Optional but Preferred)
+
+Provide:
+
+* React component structure
+* API call example
+* State handling
+
+---
+
+### 🔹 12. Make It Demo-Friendly
+
+IMPORTANT:
+This is a college project demo. Optimize for:
+
+* Simplicity
+* Fast response
+* Clean UI
+* Impressive visualization
+
+---
+
+Now here is my backend/model information:
+[PASTE YOUR MODEL DETAILS HERE]
+
+Generate the full frontend specification.

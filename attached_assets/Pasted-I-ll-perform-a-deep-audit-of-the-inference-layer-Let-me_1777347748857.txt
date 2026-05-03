@@ -1,0 +1,381 @@
+I'll perform a deep audit of the inference layer. Let me start by exploring the structure.
+28 actions
+I have enough context to deliver the audit. Below is the strict-format audit covering all 19 files in src/inference/* and their integrations with src/data_processing/*, src/aggregation/*, src/explainability/*, src/graph/*, src/evaluation/*, and api/app.py.
+________________________________________
+🔥 TruthLens Inference-Layer Audit
+🔴 1. CRITICAL INFERENCE BUGS
+________________________________________
+CRIT-1 — Two conflicting InferenceConfig classes (contract split)
+•	Files: src/inference/inference_engine.py (lines 34-46) and src/inference/inference_config.py (lines 18-60)
+•	Function: both define a dataclass named InferenceConfig with disjoint field sets.
+•	Issue: inference_config.InferenceConfigLoader.load() returns an object with fields device, batch_size, max_sequence_length, use_graph_analysis, ..., but inference_engine.InferenceEngine(config=…) requires model_path, tokenizer_path, max_length, use_amp, enable_full_pipeline. The two are not interchangeable, but api/app.py aliases the engine version as EngineConfig → there is no path through which the YAML loader actually configures the engine.
+•	Why it breaks inference: the YAML config (use_graph_analysis, cache_predictions, prediction_timeout) is silently inert. Every "configurability" flag in the loader is dead.
+•	Exact fix:
+i.	Delete the duplicate in inference_config.py.
+ii.	Make the engine InferenceConfig the single source of truth and extend it with the loader-only fields that are actually used (use_graph_analysis, cache_predictions, prediction_timeout).
+iii.	Have InferenceConfigLoader.load() return the engine dataclass.
+________________________________________
+CRIT-2 — Output-shape contract mismatch between InferenceEngine and PredictionService
+•	Files: src/inference/inference_engine.py (lines 204-238), src/inference/prediction_service.py (lines 199-218)
+•	Function: InferenceEngine.predict_for_evaluation returns a flat single-task dict with top-level keys texts, predictions, probabilities, calibrated_probabilities, logits. PredictionService._compute_uncertainty iterates for task, out in outputs.items(): probs = out["probabilities"].
+•	Why it breaks inference: the iteration walks keys "texts", "predictions", etc. and tries "texts"["probabilities"] → TypeError: string indices must be integers. Same break in predict_api.predict_with_uncertainty (lines 174-180).
+•	Exact fix:
+# Engine should return: {task_name: {"logits", "probabilities", "predictions"}, ...}
+return {
+    "primary": {  # or task name from label_map
+        "logits": logits.numpy(),
+        "probabilities": probs.numpy(),
+        "calibrated_probabilities": cal.numpy(),
+        "predictions": preds,
+    },
+    "_meta": {"texts": texts},
+}
+Then update consumers (prediction_service._postprocess, predict_api.predict_with_uncertainty) to use the nested shape.
+________________________________________
+CRIT-3 — propaganda task type contradicts training config
+•	Files: src/inference/inference_pipeline.py (line 131), config/config.yaml (line 64)
+•	Function: PredictionPipeline._BINARY_TASKS = {"propaganda"}.
+•	Issue: training declares tasks.propaganda: "multiclass". Inference applies sigmoid + 0.5 threshold to logits trained with cross-entropy → predictions are nonsense.
+•	Why it breaks inference: every propaganda prediction is wrong; downstream credibility score consumes a corrupt signal.
+•	Exact fix: drive task types from config.yaml, not class constants:
+from src.utils.settings import load_settings
+_TASKS = load_settings().tasks   # {bias: multiclass, propaganda: multiclass, emotion: multilabel, ...}
+...
+task_type = _TASKS[task]
+if task_type == "multilabel": ...
+elif task_type == "binary":   ...
+else:                         # multiclass
+________________________________________
+CRIT-4 — Hardcoded "fake_probability = probs[:,1]" assumes binary task
+•	Files: src/inference/inference_engine.py (line 281), src/inference/prediction_service.py (lines 108, 187)
+•	Function: predict(), predict_batch(), _postprocess().
+•	Issue: float(probs_arr[i][1]) assumes a 2-class softmax with index 1 = "fake". The training schema has bias=multiclass(≥3), ideology=multiclass, emotion=multilabel(20). The fake-news probability semantic only exists for the legacy single-task model.
+•	Why it breaks inference: with the multitask model, this returns the probability of an arbitrary class (e.g. "ideology=center") and labels it "fake_probability".
+•	Exact fix: remove fake_probability from these endpoints and replace with per-task structured output. Keep the legacy field gated on label_map == {0: "real", 1: "fake"}.
+________________________________________
+CRIT-5 — predict_api._get_service hardcodes model_path="models"
+•	File: src/inference/predict_api.py (line 43)
+•	Function: _get_service.
+•	Issue: ignores SETTINGS.model.path (/home/runner/workspace/saved_models). On startup, InferenceEngine tries to load ./models/, which does not contain the trained checkpoint. api/app.py constructs its own engine correctly using MODEL_PATH, but every caller of predict_api.predict() (the src.inference public API) hits the wrong directory.
+•	Why it breaks inference: silent fallback either crashes (FileNotFound) or loads a stale model.
+•	Exact fix:
+from src.utils.settings import load_settings
+SETTINGS = load_settings()
+...
+engine = InferenceEngine(InferenceConfig(
+    model_path=str(SETTINGS.model.path),
+    tokenizer_path=str(SETTINGS.model.path),
+    max_length=SETTINGS.model.max_length,
+    device=SETTINGS.inference.device,
+))
+________________________________________
+CRIT-6 — BatchInferenceEngine feeds 1-feature input to a 200-feature model
+•	File: src/inference/batch_inference.py (line 119)
+•	Function: _process_batch.
+•	Issue: features = [{"text": t, "text_length": len(t)}] — only text_length is computed. The bias/ideology/emotion models were trained on the full fused-feature vector (~200 dims from FeaturePipeline.batch_extract).
+•	Why it breaks inference: FeaturePreparer zero-fills missing features, so the model receives [len(t), 0, 0, 0, …]. Predictions are constant noise.
+•	Exact fix: wire the trained FeaturePipeline into batch inference:
+from src.features.pipelines.feature_pipeline import FeaturePipeline
+from src.features.base.base_feature import FeatureContext
+...
+contexts = [FeatureContext(text=t) for t in texts]
+feature_dicts = self.feature_pipeline.batch_extract(contexts)  # vectorized path
+prepared = self.feature_preparer.prepare_batch(feature_dicts)
+________________________________________
+CRIT-7 — Calibration try/except: pass swallows failures silently
+•	File: src/inference/inference_engine.py (lines 178-198)
+•	Function: _apply_calibration.
+•	Issue: both calibrators wrapped in bare try/except: pass. If temperature scaling fails (e.g. unfit), code falls through to isotonic which is then passed probs (post-softmax), but isotonic was likely fit on logits or per-class probabilities — unspecified contract.
+•	Why it breaks inference: silent calibration drop. calibrated_probabilities == probabilities and the caller cannot tell.
+•	Exact fix:
+if self.temperature_scaler is not None:
+    return self.temperature_scaler.predict_proba(logits)  # let it raise
+if self.isotonic_calibrator is not None:
+    cal = self.isotonic_calibrator.predict_proba(probs.detach().cpu().numpy())
+    return torch.tensor(cal, device=probs.device, dtype=probs.dtype)
+return probs
+Plus: emit a one-shot WARN at engine init when temperature_scaler is None and isotonic_calibrator is None.
+________________________________________
+CRIT-8 — Postprocessor instantiated but never invoked in InferenceEngine
+•	File: src/inference/inference_engine.py (lines 73, 219-230)
+•	Issue: self.postprocessor = postprocessor or Postprocessor() is set, then predict_for_evaluation does its own softmax + argmax directly. Postprocessor.process is never called.
+•	Why it matters: task-aware activation (sigmoid for multilabel) and per-task thresholds defined in Postprocessor are ignored. Multilabel tasks get softmax + argmax (single-label output) → corrupted predictions for the emotion/narrative heads.
+•	Exact fix: route the engine output through self.postprocessor.process(raw, task_types=…) after the forward pass.
+________________________________________
+🟠 2. LATENCY BOTTLENECKS
+________________________________________
+LAT-1 — Per-sample prediction_service.predict(text) loop in evaluation/analysis
+•	Locations:
+o	src/evaluation/advanced_analysis.py:132 → [prediction_service.predict(t) for t in texts]
+o	src/inference/analyze_article.py:147 → prediction_service.predict(text) per call
+•	Issue: every call tokenizes 1 text, runs 1 forward (batch=1), runs the whole graph + explainability + aggregation pipeline. GPU never gets a real batch.
+•	Fix: add predict_full_batch(texts: List[str]) to PredictionService that:
+i.	tokenizes once with padding=True,
+ii.	runs one forward pass,
+iii.	parallelizes graph+aggregation per sample (or batches them too).
+•	Expected speedup: 15–40× on GPU for batches ≥16, ~3× on CPU from amortizing tokenizer + Python overhead.
+________________________________________
+LAT-2 — FeaturePreparer.prepare_batch spawns a multiprocessing Pool on threshold cross
+•	File: src/inference/feature_preparer.py (lines 119-122, 205-209)
+•	Issue: if len(feature_dicts) ≥ 32: pool.map(_prepare_flat_features_worker, ...). mp.get_context("spawn").Pool(N-1) cold-starts in 1–3 seconds the first time. For online inference this is a tail-latency cliff.
+•	Issue 2: worker (_prepare_flat_features_worker) and _flatten produce different feature sets — worker emits {key}_count for list/tuple/set, _flatten does not. Same input → different vector dim depending on batch size. Silent feature corruption.
+•	Issue 3: _get_pool lazy init has no lock — two concurrent first-callers create two pools.
+•	Fix:
+i.	Delete the multiprocessing path. The flatten op is microseconds — the pool is pure overhead.
+ii.	Make _flatten and worker the same function (single source).
+•	Expected speedup: -2s tail latency, no correctness drift between batch sizes.
+________________________________________
+LAT-3 — InferenceCache.set/get is JSON-serialization-bound
+•	File: src/inference/inference_cache.py (lines 198-220)
+•	Issue: json.loads(json.dumps(value, default=_serialize)) — value is serialized twice (once to normalize numpy, then again to write). For payloads with logits (tensor [N, num_classes]), this is dominant cost.
+•	Fix:
+payload = json.dumps(value, default=_serialize, separators=(",", ":"))
+entry = {"ts": time.monotonic(), "value_raw": payload}
+# write payload directly, don't double-serialize
+Or switch to pickle/orjson for cached prediction blobs.
+•	Expected speedup: 3–5× cache write throughput.
+________________________________________
+LAT-4 — InferenceCache.get holds _lock during disk read
+•	File: src/inference/inference_cache.py (lines 162-192)
+•	Issue: the with self._lock: block wraps both the memory check and the disk _safe_read. Concurrent requests serialize on disk IO.
+•	Fix: acquire the lock only for memory mutation. Disk read is safe outside (filesystem-atomic via os.replace in _safe_write).
+________________________________________
+LAT-5 — _inflight request-coalescing dict declared but never used
+•	File: src/inference/inference_cache.py (line 65)
+•	Issue: self._inflight: Dict[str, Lock] = {} exists but no code path consults it. Concurrent requests for the same text re-tokenize and re-run the model.
+•	Fix: wire it as a single-flight pattern around engine.predict_for_evaluation so duplicate concurrent calls coalesce on one in-flight result.
+________________________________________
+LAT-6 — torch.compile(model) unconditionally on CUDA
+•	File: src/inference/model_loader.py (lines 159-163)
+•	Issue: torch.compile on first forward triggers a 30s–2min Triton/Inductor compile for short-text models. Not behind any opt-in flag. For interactive APIs this is a cold-start nuke.
+•	Fix: gate behind config (config.use_torch_compile = False default). When enabled, run a warmup forward at load time so compile cost is amortized before the first user request.
+________________________________________
+LAT-7 — Tokenizer call uses padding=True (longest-in-batch) — good, but max_length = 512 is non-dynamic
+•	File: src/inference/inference_engine.py (line 161)
+•	Issue: even for 5-token tweets, the engine reserves up to 512 token positions in the AMP context. Memory + compute waste for short texts.
+•	Fix: keep padding=True, but compute max_length = min(self.config.max_length, max_len_in_batch) — but actually truncation=True, padding=True already does this. The real issue is that _warmup uses ["warmup"] (1 token) so cuDNN autotunes for short seq; first long-text call re-autotunes. Use a more representative warmup (e.g. 256 tokens).
+________________________________________
+🟡 3. POST-PROCESSING ERRORS
+________________________________________
+PP-1 — Multiclass softmax applied unconditionally in UnifiedPredictor._format_output
+•	File: src/inference/model_loader.py (lines 61-80)
+•	Issue: probs = torch.softmax(torch.tensor(logits), dim=-1).numpy() runs even for multilabel tasks (emotion has 20 labels). For multilabel, this normalizes 20 sigmoids into a Categorical → all probabilities collapse, multilabel semantics lost.
+•	Fix: carry task_type through the predictor and switch activation accordingly.
+________________________________________
+PP-2 — Hardcoded _MULTILABEL_THRESHOLD = 0.5
+•	File: src/inference/inference_pipeline.py (line 133)
+•	Issue: training likely produces a per-label F1-optimal threshold via src/evaluation/threshold_optimizer.py. Inference ignores it.
+•	Fix: persist optimal thresholds during training (e.g. saved_models/thresholds.json), load at engine init, plumb into Postprocessor.config.task_thresholds.
+________________________________________
+PP-3 — Postprocessor._compute_probs defaults task_type = "multiclass" when task_types is None
+•	File: src/inference/postprocessing.py (lines 77-79)
+•	Issue: silent fallback hides task-type misconfiguration. Better to raise.
+•	Fix: require explicit task_types; raise KeyError for unknown tasks.
+________________________________________
+PP-4 — _compute_uncertainty computes wrong entropy for multilabel
+•	File: src/inference/prediction_service.py (line 212)
+•	Issue: entropy = -np.sum(probs * np.log(probs+eps), axis=1) is the categorical entropy. For multilabel (independent Bernoullis), correct entropy is -Σ_k [p_k log p_k + (1-p_k) log(1-p_k)].
+•	Fix: branch on task type:
+if task_type == "multilabel":
+    entropy = -np.sum(probs*np.log(probs+eps) + (1-probs)*np.log(1-probs+eps), axis=1)
+else:
+    entropy = -np.sum(probs*np.log(probs+eps), axis=1)
+________________________________________
+🧠 4. MULTI-TASK FAILURES
+________________________________________
+MT-1 — predict_for_evaluation is single-task by construction
+Already covered in CRIT-2. The engine does np.argmax(cal.numpy(), axis=1) which assumes one classification head. For the actual multitask model (bias+ideology+propaganda+narrative+emotion), this collapses everything.
+Fix: after model(**encoded), if outputs is a dict[str, Tensor] or a custom multitask object, dispatch per-task as in PredictionPipeline.predict_multitask rather than treating .logits as a single tensor.
+________________________________________
+MT-2 — Two unrelated "pipelines" exist: InferenceEngine (HF AutoModelForSequenceClassification, single-task) vs PredictionPipeline (multi-head, accepts pre-computed feature tensor)
+•	Issue: they don't share I/O, postprocessing, or batching. BatchInferenceEngine uses PredictionPipeline; predict_api uses InferenceEngine. The "full pipeline" path (InferenceEngine.predict_full → PredictionService → PredictionPipeline.predict_full) goes through both.
+•	Fix: unify under one MultiTaskInferenceEngine that owns tokenizer + multitask model + postprocessor + calibrator. The PredictionPipeline becomes its predict_multitask method.
+________________________________________
+MT-3 — Per-task calibrators not supported
+•	File: src/inference/inference_engine.py (lines 66-67)
+•	Issue: temperature_scaler and isotonic_calibrator are single objects. A multitask model needs one calibrator per task head.
+•	Fix: Dict[str, TemperatureScaler] keyed by task, applied per-task in the postprocessing step.
+________________________________________
+🚀 5. GPU / DEVICE ISSUES
+________________________________________
+DEV-1 — model = model.to(dtype=torch.float16) on CUDA invalidates calibration
+•	File: src/inference/model_loader.py (lines 152-155)
+•	Issue: model weights cast to fp16 unconditionally. Calibrators (TemperatureScaler) were fit on fp32 logits during validation. Inference logits are now fp16-rounded → calibration error increases (typically +1–2% ECE).
+•	Fix: keep weights in fp32 and use AMP autocast (already done in _forward) — autocast applies fp16 to compute-bound ops while keeping accumulators in fp32. Best of both worlds.
+________________________________________
+DEV-2 — PredictionPipeline autocast hardcodes dtype=torch.float16
+•	File: src/inference/inference_pipeline.py (line 90)
+•	Issue: config.precision.amp_dtype: "bf16" in training. Mismatch — bf16 has wider range than fp16; some logits will overflow under fp16 (especially for the unbalanced bias head).
+•	Fix: read amp_dtype from settings:
+amp_dtype = torch.bfloat16 if SETTINGS.precision.amp_dtype == "bf16" else torch.float16
+torch.autocast("cuda", dtype=amp_dtype)
+________________________________________
+DEV-3 — No model.requires_grad_(False) after load
+•	File: src/inference/inference_engine.py (line 119), src/inference/model_loader.py (line 165)
+•	Issue: model.eval() only disables dropout/BN-running-stats; parameters still have requires_grad=True. torch.inference_mode() works around this, but any consumer that uses torch.no_grad() instead (e.g. PredictionPipeline._forward_all) still allocates version counters.
+•	Fix: after load: for p in self.model.parameters(): p.requires_grad_(False).
+________________________________________
+DEV-4 — Tensor .cpu() ping-pong inside calibration
+•	File: src/inference/inference_engine.py (lines 188-194)
+•	Issue: for isotonic calibration: probs → .cpu() → numpy → calibrate → torch.tensor → .to(device). Necessary for sklearn but the next op (line 224) brings it back to CPU. Net: GPU→CPU→GPU→CPU per batch.
+•	Fix: if isotonic is the active calibrator, skip the .to(device) round-trip — the next step needs CPU anyway:
+cal_np = self.isotonic_calibrator.predict_proba(probs.detach().cpu().numpy())
+return torch.from_numpy(cal_np)  # stays on CPU
+________________________________________
+💾 6. MEMORY / BATCHING ISSUES
+________________________________________
+MEM-1 — predict_for_evaluation accumulates batches on CPU per batch
+•	File: src/inference/inference_engine.py (lines 215-228)
+•	Issue: every batch does .detach().cpu() immediately, allocating a host buffer per batch. For long datasets this fragments host memory; better is to accumulate on device then transfer once at end.
+•	Fix: if len(texts) ≤ some_limit, keep tensors on device until the final torch.cat, then transfer.
+________________________________________
+MEM-2 — InferenceCache.max_disk_items: Optional[int] = None — no eviction
+•	File: src/inference/inference_cache.py (line 31)
+•	Issue: disk cache grows unbounded. In production this fills the volume.
+•	Fix: implement LRU eviction (track last-access time in filename or a sidecar index).
+________________________________________
+MEM-3 — _safe_write leaves stale .tmp files after compressed write crash
+•	File: src/inference/inference_cache.py (lines 114-127)
+•	Issue: tmp = path.with_suffix(".tmp"). For cache.json.gz, with_suffix(".tmp") produces cache.json.tmp (drops .gz only; treats .gz as the suffix to replace). For cache.json it produces cache.tmp. Inconsistent. Also os.fsync is only called for the uncompressed branch, not for gzip — a crash mid-write of a compressed cache produces a partial gz that the next reader will silently delete.
+•	Fix:
+tmp = path.with_name(path.name + ".tmp")
+...
+with gzip.open(tmp, "wt", encoding="utf-8") as f:
+    f.write(payload)
+    f.flush()
+    os.fsync(f.fileno())   # also fsync for compressed
+os.replace(tmp, path)
+________________________________________
+MEM-4 — Memory cache stores parsed-JSON copy of value (loses dtype)
+•	File: src/inference/inference_cache.py (line 204)
+•	Issue: json.loads(json.dumps(value, default=_serialize)) — numpy arrays become nested Python lists. Subsequent np.asarray(cached["probabilities"]) reconstructs them with default float64 even if original was float32. Doubles memory.
+•	Fix: keep the original value in memory cache; only serialize for disk.
+________________________________________
+🔄 7. RECOMPUTATION ISSUES
+________________________________________
+REC-1 — analyze_article._run_prediction calls predict() per text (no cache hit on duplicate)
+•	File: src/inference/analyze_article.py (line 147)
+•	Issue: predict() does check the cache, but predict() only returns the basic {label, confidence, fake_probability} blob. The graph/explainability that analyze() already computed is recomputed here. Worse: prediction_output["raw_output"] reads graph, graph_explanation keys that the basic predict() never sets.
+•	Fix: analyze() already builds the full report (graph, profile, etc.). Pass that into _run_prediction and only fetch the model logits — don't go through the full prediction_service.predict().
+________________________________________
+REC-2 — PredictionService.predict_full re-tokenizes after predict() already cached
+•	File: src/inference/prediction_service.py (lines 122-139)
+•	Issue: predict_full(text) calls engine.predict_for_evaluation([text]) again — does not consult the cache populated by predict(text).
+•	Fix: check self.cache.get(text) first; reuse logits if present.
+________________________________________
+REC-3 — Tokenizer constructed twice on engine init
+•	Files: src/inference/inference_engine.py (line 111), src/inference/model_loader.py (line 173)
+•	Issue: when both InferenceEngine and ModelLoader are used (full pipeline), each loads its own AutoTokenizer.from_pretrained. Fast, but unnecessary memory + filesystem IO on cold start.
+•	Fix: single shared tokenizer (singleton in model_loader).
+________________________________________
+REC-4 — report_generator.generate_report creates a new aggregation_pipeline.run() if aggregation missing
+•	File: src/inference/report_generator.py (lines 105-117)
+•	Issue: if a caller already ran aggregation upstream and forgot to attach it, generator silently re-runs the aggregation pipeline. With a 200-feature profile + 15 analyzers, this is multi-second.
+•	Fix: make aggregation mandatory; raise instead of silently re-running.
+________________________________________
+🧹 8. UNUSED / DEAD INFERENCE CODE
+________________________________________
+Module	Status	Action
+src/inference/postprocessing.Postprocessor (in InferenceEngine)	UNUSED — instantiated, never invoked	Wire into predict_for_evaluation post-softmax step (CRIT-8)
+src/inference/inference_config.InferenceConfigLoader	UNUSED — no consumer reads YAML config into engine	Delete or refactor (CRIT-1)
+src/inference/inference_cache.InferenceCache._inflight	DEAD field	Wire single-flight (LAT-5) or delete
+src/inference/monitoring.InferenceMonitor (via predict_api)	UNUSED — service.monitor set but update() never called	Wire monitor.update(latency_ms=…, confidence=…, probabilities=…) into PredictionService.predict
+src/inference/drift_detection.DriftDetector	UNUSED at runtime — no caller invokes detect()	Either expose /drift/check endpoint with rolling baseline, or delete
+src/inference/inference_engine.InferenceConfig.return_logits / return_probabilities	UNUSED flags	Honor in output construction or delete
+src/inference/run_inference.py (--evaluate, --save_uncertainty)	OK CLI but uses single-task engine; partly broken with multitask model	Migrate to multitask engine (MT-2)
+src/inference/feature_preparer.FeaturePreparer.compute_feature_statistics	OK but not called from any inference path	Move to a feature-debug module
+src/inference/inference_engine.InferenceConfig.enable_full_pipeline	Half-wired — sets up PredictionService but prediction_service.predict_full(text) re-uses base engine, doesn't call PredictionPipeline.predict_full	Either delete the flag or fully wire it
+________________________________________
+⚙️ 9. CONFIG ISSUES
+________________________________________
+CFG-1 — Hardcoded model_path="models" in predict_api.py (CRIT-5).
+CFG-2 — Hardcoded cache_version="v2" in predict_api, default "v1" in InferenceCache — divergent caches across entry points.
+•	File: src/inference/predict_api.py:52 vs inference_cache.py:34
+•	Fix: single INFERENCE_CACHE_VERSION constant, bumped on schema change.
+CFG-3 — _MULTILABEL_THRESHOLD = 0.5 hardcoded (PP-2).
+CFG-4 — PredictionPipelineConfig.device: str = "cpu" default
+•	File: src/inference/inference_pipeline.py:33
+•	Issue: silent CPU default even when CUDA is available. Other components use "auto".
+•	Fix: default to "auto" and resolve via shared get_device() helper.
+CFG-5 — Batch size hardcoded in multiple places
+•	inference_engine.InferenceConfig.batch_size = 16
+•	inference_config.InferenceConfig.batch_size = 32
+•	batch_inference.BatchInferenceConfig.batch_size = 32
+•	Fix: one source of truth (SETTINGS.inference.batch_size).
+CFG-6 — report_version="v3" hardcoded in report_generator.py:189
+•	Fix: read from a constants module.
+CFG-7 — InferenceConfigLoader._validate_config allows batch_size to be missing then later fails on <= 0 check (line 130-132) only when present — inconsistent enforcement.
+________________________________________
+🧪 10. EDGE CASE FAILURES
+________________________________________
+Edge case	File / line	Failure	Fix
+Empty input string	inference_engine._validate_input → ensure_non_empty_text_list	OK, raises ValueError	✅
+Whitespace-only input	ensure_non_empty_text_list	likely accepts (only len()==0 is rejected)	strip and re-check
+Single emoji / non-text	tokenizer(...) returns [CLS][SEP] only	model produces uninformative logits, no warning	log when attention_mask.sum() < 3
+Input >> 512 tokens	truncation=True silently drops tail	no warning at inference (training has it)	log a one-shot per request: "input truncated from N→512"
+batch_size=1	works but doesn't trigger AMP autotune effectively	first call ~5× slower than steady state	_warmup should use multiple lengths
+Concurrent identical requests	re-tokenizes, re-runs model	wasted compute	wire _inflight (LAT-5)
+Multilingual input (non-EN)	RoBERTa-base is English; spaCy loads en_blank (logged)	silent quality degradation	detect with langdetect and add language field to output
+Model dir missing files (label_map.json, etc.)	_load_label_map returns silently if file missing	predictions are integer-only, downstream label mapping breaks	warn on missing label map
+nan/inf logits	softmax propagates nan → argmax returns 0	silent wrong prediction	torch.isnan(logits).any() check + raise
+Cache file corrupt mid-read	_safe_read raises → caught, file deleted	OK	✅
+Cache file partially written gz (MEM-3)	gzip.open raises BadGzipFile → caught, deleted	OK but lost work	fix MEM-3
+________________________________________
+✅ 11. VERIFIED COMPONENTS
+Component	Status
+model.eval() is called before forward	✅ engine.py:119, model_loader.py:165
+torch.inference_mode() wraps forward	✅ engine.py:215
+Tokenizer use_fast=True (Rust tokenizer, not Python)	✅ engine.py:111, model_loader.py:173
+Tokenizer + model loaded once at engine construction	✅ engine.py:_load_model
+AMP autocast guard for non-CUDA paths	✅ engine.py:75 (use_amp = device.type=='cuda' and config.use_amp)
+Warmup forward at init	✅ engine.py:130
+non_blocking=True on host→device copies	✅ engine.py:164
+Cache hash is version-aware (sha256)	✅ inference_cache.py:88-97
+Cache writes are atomic (os.replace)	✅ inference_cache.py:127
+Threading lock around cache mutation	✅ inference_cache.py:166
+padding=True (dynamic padding to longest in batch)	✅ engine.py:159
+truncation=True, max_length=…	✅ engine.py:160-161
+Graph pipeline reuses process-wide singleton	✅ pipeline.py:71, feature_preparer.py:108
+Singleton text-feature extractors	✅ feature_preparer.py:31-37
+Schema validation gate (PredictionOutput) on full-pipeline output	✅ engine.py:258
+Logger truncates large vectors	✅ inference_logger.py:21,28
+PostprocessingConfig.task_thresholds field exists	✅ postprocessing.py:29 (just not populated)
+________________________________________
+📉 12. FINAL SCORE
+Score: 5.5 / 10
+Why not 10
+1.	Two InferenceConfig classes with conflicting contracts → the YAML loader is dead code (CRIT-1).
+2.	Engine output shape doesn't match PredictionService contract → _compute_uncertainty and predict_with_uncertainty are broken on first call (CRIT-2).
+3.	Task-type config disagrees between training and inference for propaganda → silent prediction corruption (CRIT-3).
+4.	fake_probability hardcode assumes legacy 2-class model on a multitask system (CRIT-4).
+5.	predict_api hardcodes model_path="models" → public API loads the wrong directory (CRIT-5).
+6.	BatchInferenceEngine feeds a 2-feature input to a model trained on 200 features → all batch CLI predictions are wrong (CRIT-6).
+7.	Calibration silently falls back on any exception → undetectable accuracy drift (CRIT-7).
+8.	Postprocessor is dead in the engine path → multilabel tasks get softmaxed (CRIT-8).
+9.	Per-sample calls in evaluation/analyze paths waste 15–40× of GPU throughput (LAT-1).
+10.	Multiprocessing pool spawn triggers a 1–3 s tail latency cliff at batch ≥ 32 (LAT-2).
+11.	JSON double-serialization in cache hot path (LAT-3).
+12.	Single-flight coalescing dict declared but unused (LAT-5).
+13.	Unconditional torch.compile adds 30–120 s cold start (LAT-6).
+14.	amp_dtype mismatch between training (bf16) and inference (fp16) (DEV-2).
+15.	fp16 model weights invalidate fp32-fit calibration (DEV-1).
+16.	Multilabel entropy formula is wrong (PP-4).
+17.	drift_detection and monitoring modules never wired at runtime — observability is decorative (UNUSED).
+Steps to reach ≥ 9.5
+1.	Unify InferenceConfig + delete the loader duplicate. Drive everything from SETTINGS.
+2.	Pick one engine — refactor InferenceEngine to be the multitask engine, fold PredictionPipeline.predict_multitask into it. Delete the legacy single-task predict()/predict_batch()/fake_probability API.
+3.	Standardize the output contract: Dict[task, {logits, probabilities, calibrated_probabilities, predictions}]. Update every consumer (predict_api, prediction_service, result_formatter, report_generator, evaluation/*).
+4.	Load task types and per-task thresholds from config (CRIT-3 + PP-2). Persist optimal thresholds at end of training.
+5.	Wire the Postprocessor with task-aware activations + thresholds into the engine.
+6.	Per-task calibrators (Dict[str, TemperatureScaler]) loaded from saved_models/calibration/{task}.pt.
+7.	Add predict_full_batch(texts: List[str]) in PredictionService. Refactor analyze_article and evaluation/advanced_analysis to call it.
+8.	Delete the multiprocessing pool in FeaturePreparer; unify _flatten and the worker.
+9.	Cache: drop double-serialize, release lock during disk IO, wire _inflight, add LRU eviction, fix .tmp suffix and gz fsync.
+10.	AMP: read amp_dtype from settings (bf16 to match training); keep model weights in fp32 and rely on autocast.
+11.	Wire InferenceMonitor.update() into every PredictionService.predict* call so /metrics is meaningful.
+12.	Wire DriftDetector with a rolling baseline (e.g. last N=10k probabilities), expose /drift/check.
+13.	torch.compile opt-in behind config; warmup in compiled mode at init.
+14.	Edge-case guards: NaN logit check, truncation log, empty/whitespace input, language detection.
+15.	Engine output schema validated by PredictionOutput (Pydantic model with multitask fields) at every boundary, not just in predict_full.
+After these, the inference layer is fast, batch-optimized, contract-clean, and production-ready.
+

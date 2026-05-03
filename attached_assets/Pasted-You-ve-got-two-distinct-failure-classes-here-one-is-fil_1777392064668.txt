@@ -1,0 +1,240 @@
+You’ve got **two distinct failure classes** here—one is **filesystem/config integrity**, the other is a **function contract violation**. Let’s break them down precisely and fix them cleanly.
+
+---
+
+# 🔴 1. Lexicon Files Missing (Hard Failure in Feature Layer)
+
+### Error
+
+```
+Lexicon file missing:
+.../src/config/lexicons/bias.json
+.../framing.json
+.../ideology.json
+```
+
+### Root Cause
+
+Your pipeline **expects static lexicon assets**, but:
+
+* Files don’t exist **OR**
+* Path resolution is wrong **OR**
+* Repo structure changed but config didn’t
+
+### 🔧 Fix Options (choose one properly)
+
+## ✅ Option A — Create Required Files (fastest unblock)
+
+Create directory:
+
+```
+src/config/lexicons/
+```
+
+Create minimal valid JSON files:
+
+### `bias.json`
+
+```json
+{
+  "loaded_terms": ["clearly", "obviously", "undeniably"],
+  "emotive_terms": ["outrageous", "shocking"],
+  "assertive_terms": ["prove", "confirm"]
+}
+```
+
+### `framing.json`
+
+```json
+{
+  "economic": ["cost", "growth", "market"],
+  "conflict": ["battle", "fight", "clash"],
+  "human_interest": ["family", "children"]
+}
+```
+
+### `ideology.json`
+
+```json
+{
+  "left": ["equality", "welfare"],
+  "right": ["freedom", "market"],
+  "center": ["policy", "governance"]
+}
+```
+
+---
+
+## ✅ Option B — Fix Path Resolution (proper engineering fix)
+
+Somewhere you likely have:
+
+```python
+LEXICON_PATH = "src/config/lexicons/"
+```
+
+This **breaks in Replit / container environments**.
+
+### Replace with:
+
+```python
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent  # adjust if needed
+LEXICON_PATH = BASE_DIR / "config" / "lexicons"
+```
+
+And when loading:
+
+```python
+file_path = LEXICON_PATH / "bias.json"
+```
+
+---
+
+## ✅ Option C — Make Lexicons Optional (robust production design)
+
+Wrap loading:
+
+```python
+def load_lexicon_safe(path):
+    if not path.exists():
+        logging.warning(f"Lexicon missing: {path}")
+        return {}
+    return json.load(open(path))
+```
+
+This prevents **pipeline crash**, which is critical for production.
+
+---
+
+# 🔴 2. `load_config()` Missing Argument
+
+### Error
+
+```
+TypeError: load_config() missing 1 required positional argument: 'path'
+```
+
+### Root Cause
+
+Your function signature is:
+
+```python
+def load_config(path):
+```
+
+But you are calling:
+
+```python
+config = load_config()
+```
+
+---
+
+# 🔧 Fix (choose architecture)
+
+## ✅ Option A — Pass Explicit Path (recommended)
+
+In `main.py`:
+
+```python
+config = load_config("src/config/config.yaml")
+```
+
+OR better:
+
+```python
+from pathlib import Path
+
+config_path = Path(__file__).resolve().parent / "src" / "config" / "config.yaml"
+config = load_config(config_path)
+```
+
+---
+
+## ✅ Option B — Add Default Path (cleaner API)
+
+Modify function:
+
+```python
+def load_config(path=None):
+    if path is None:
+        from pathlib import Path
+        path = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
+
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+```
+
+Now your original call works:
+
+```python
+config = load_config()
+```
+
+---
+
+## ✅ Option C — Config Injection (best for ML systems)
+
+Pass config from CLI or environment:
+
+```python
+import os
+
+config = load_config(os.getenv("CONFIG_PATH", "src/config/config.yaml"))
+```
+
+---
+
+# ⚠️ Hidden Issue You Likely Have (Important)
+
+Given your earlier pipeline complexity:
+
+* Your **analyzers depend on lexicons**
+* Your **config loader probably defines lexicon paths**
+* But **you are hardcoding paths somewhere else**
+
+👉 This creates inconsistency between:
+
+* `config.yaml`
+* actual filesystem
+* runtime loader
+
+### 🔥 Strong Recommendation
+
+Centralize:
+
+```yaml
+# config.yaml
+lexicons:
+  bias: src/config/lexicons/bias.json
+  framing: src/config/lexicons/framing.json
+  ideology: src/config/lexicons/ideology.json
+```
+
+Then:
+
+```python
+config = load_config(...)
+bias_lexicon = load_lexicon_safe(Path(config["lexicons"]["bias"]))
+```
+
+---
+
+# ✅ Final Checklist
+
+Fix in this exact order:
+
+1. ✔ Fix `load_config()` call (this is blocking execution)
+2. ✔ Ensure lexicon directory exists
+3. ✔ Either:
+
+   * create files OR
+   * make loading safe
+4. ✔ Replace all string paths with `Path()` logic
+5. ✔ (Optional but high value) move paths into config.yaml
+
+---
+
+If you want, I can **scan your full repo structure mentally and give you an exact corrected `main.py + config loader + lexicon loader` setup** that is production-grade and GPU-safe.

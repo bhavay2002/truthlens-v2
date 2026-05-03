@@ -1,0 +1,203 @@
+You are a senior ML systems engineer, data scientist, and technical documentation expert.
+
+Your task is to generate a COMPLETE, PRODUCTION-GRADE documentation file named `analysis.md` for the `src/analysis` folder of a machine learning repository.
+
+---
+
+## 🎯 Objective
+
+Create a deeply structured and technically precise document that enables any ML engineer, data scientist, or reviewer to:
+
+* Fully understand the purpose of the analysis layer
+* Interpret what each file computes and why
+* Understand statistical, analytical, and diagnostic logic
+* Trace how insights are derived from processed data
+* Debug, validate, or extend analysis modules confidently
+
+---
+
+## 📁 Scope
+
+Analyze ALL files inside:
+src/analysis/
+
+Include:
+
+* Every Python file
+* Subfolders (if any)
+* Any shared utilities used within analysis
+
+---
+
+## 📚 Required Output Structure (STRICT)
+
+### 1. Overview
+
+* Purpose of `src/analysis`
+* Role in ML lifecycle (EDA, diagnostics, feature understanding, validation)
+* Difference between analysis vs features vs evaluation layers
+
+---
+
+### 2. Folder Architecture
+
+* Tree structure of `src/analysis`
+* One-line explanation per file/module
+
+Example:
+src/analysis/
+├── eda.py              → Exploratory Data Analysis
+├── stats.py            → Statistical summaries
+├── drift.py            → Data drift detection
+...
+
+---
+
+### 3. End-to-End Analysis Flow
+
+* Step-by-step flow of how analysis is performed
+* Input → intermediate computations → outputs (metrics, reports, plots)
+* Function/module interaction graph (who calls what)
+* Execution order if part of pipeline
+
+---
+
+### 4. File-by-File Deep Dive
+
+For EACH file:
+
+#### File: <filename.py>
+
+**Purpose**
+
+* Why this analysis exists (business + technical reasoning)
+
+**Key Functions / Classes**
+For each function:
+
+* Function name
+* Input parameters (types + meaning)
+* Output (metrics, dicts, DataFrames, plots, etc.)
+* Exact logic (step-by-step breakdown)
+* Statistical or mathematical methods used
+
+**Analytical Techniques Used**
+
+* e.g., correlation analysis, hypothesis testing, distribution analysis, skewness/kurtosis, PCA, clustering, etc.
+
+**Dependencies**
+
+* Internal modules
+* External libraries (numpy, pandas, scipy, statsmodels, etc.)
+
+**Performance Notes**
+
+* Vectorization
+* Sampling strategies
+* Memory-heavy operations
+
+---
+
+### 5. Metrics & Statistical Definitions
+
+* Definitions of all computed metrics
+* Formulas (if applicable)
+* Interpretation guidelines (what high/low values mean)
+
+---
+
+### 6. Data Assumptions
+
+* Expected input format and schema
+* Assumptions about distributions, missing values, outliers
+* Preconditions before running analysis
+
+---
+
+### 7. Output Artifacts
+
+* What this folder produces:
+
+  * Reports (JSON, HTML, Markdown)
+  * Plots/visualizations
+  * Logs
+* Structure and meaning of outputs
+
+---
+
+### 8. Config Integration
+
+* How analysis behavior is controlled via config files
+* Thresholds (e.g., drift thresholds, correlation cutoffs)
+* Flags (enable/disable modules)
+
+---
+
+### 9. Validation & Sanity Checks
+
+* Checks for data integrity
+* Statistical sanity validations
+* Guardrails against misleading insights
+
+---
+
+### 10. Optimization & Efficiency
+
+* Batch processing
+* Parallel computation
+* Lazy evaluation
+* Handling large datasets efficiently
+
+---
+
+### 11. Extensibility Guide
+
+* How to add a new analysis module
+* How to plug into existing pipeline
+* Best practices for adding new metrics or statistical tests
+
+---
+
+### 12. Common Pitfalls / Risks
+
+* Misinterpretation of metrics
+* Data leakage during analysis
+* Bias in sampling
+* Overfitting insights to sample data
+
+---
+
+### 13. Example Usage
+
+* Minimal working example of running analysis
+* Sample input → output
+
+---
+
+## ⚠️ Constraints
+
+* DO NOT give generic explanations
+* DO NOT skip any file
+* DO NOT assume undocumented behavior
+* Be mathematically and technically precise
+* Avoid vague statements like “analyzes data”
+
+---
+
+## 💡 Style Guidelines
+
+* Clean markdown with headings
+* Use tables for metrics and schemas
+* Use code blocks where needed
+* Keep explanations concise but deep
+
+---
+
+## 🚀 Goal
+
+After reading `analysis.md`, a developer should:
+
+* Understand all analysis computations without reading code
+* Know how to interpret outputs
+* Be able to safely modify or extend analysis logic
+* Trust the correctness and purpose of every metric

@@ -1,0 +1,202 @@
+🚀 TRUTHLENS GRAPH LAYER AUDIT PROMPT (v11 – STRUCTURE + PERFORMANCE CRITICAL)
+You are a principal graph ML engineer, systems architect, and high-performance pipeline auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the src/graph/ folder.
+
+Also make graph_audit.md file which list all your findings
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Graph construction and processing must be structurally correct, semantically meaningful, memory-efficient, and highly optimized.
+You must ensure:
+•	No incorrect graph structure ❌
+•	No entity/token misalignment ❌
+•	No redundant graph construction ❌
+•	No inefficient traversal ❌
+•	No per-node Python loops ❌
+•	No unused graph modules ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/graph/* all files
+Also validate integration with:
+•	src/data/ (text, tokens, entities)
+•	src/features/ (feature inputs)
+•	src/analysis/
+•	src/models/ (graph inputs to model)
+•	src/config/
+________________________________________
+🔥 AUDIT DIMENSIONS (GRAPH-SPECIFIC)
+________________________________________
+1. 🔗 GRAPH PIPELINE INTEGRITY
+Trace:
+text / tokens / entities
+→ entity extraction
+→ node creation
+→ edge construction
+→ graph features
+→ graph encoding
+→ model input
+MUST VERIFY:
+•	correct node/edge creation
+•	graph flows correctly into model
+•	no missing stages
+CRITICAL:
+•	nodes created without edges ❌
+•	graph not used downstream ❌
+________________________________________
+2. 🧠 GRAPH SEMANTIC CORRECTNESS
+MUST VERIFY:
+•	nodes represent correct entities (tokens / phrases / entities)
+•	edges represent meaningful relationships
+CHECK:
+•	relation types valid
+•	no random or weak edges
+CRITICAL BUGS:
+•	incorrect entity linking ❌
+•	meaningless fully-connected graphs ❌
+________________________________________
+3. 🧩 TOKEN / ENTITY ALIGNMENT (CRITICAL)
+Trace:
+tokens → entities → graph nodes → features → model
+MUST VERIFY:
+•	node indices align with tokens/entities
+•	offsets preserved
+CRITICAL:
+•	mismatch between token positions and graph nodes ❌
+•	broken mapping back to text ❌
+________________________________________
+4. ⚡ GRAPH CONSTRUCTION PERFORMANCE
+FORBIDDEN:
+•	rebuilding graph per forward pass ❌
+•	Python loops over nodes/edges ❌
+MUST VERIFY:
+•	vectorized construction where possible
+•	batched graph building
+________________________________________
+5. 🚀 GRAPH BATCHING (TOP PRIORITY)
+MUST VERIFY:
+•	multiple graphs batched efficiently
+•	compatible with frameworks (PyG / DGL)
+CHECK:
+•	padding vs concatenation strategy
+•	memory efficiency
+CRITICAL:
+•	processing graphs one-by-one ❌
+________________________________________
+6. 🔄 RECOMPUTATION ELIMINATION
+MUST VERIFY:
+•	graph built once per sample (or cached)
+•	graph features reused
+CRITICAL:
+•	recomputing graph for every epoch or inference ❌
+________________________________________
+7. 🧱 GRAPH FEATURE QUALITY
+MUST VERIFY:
+•	node features meaningful
+•	edge features consistent
+DETECT:
+•	constant features
+•	redundant features
+•	noisy signals
+________________________________________
+8. 🧮 NUMERICAL STABILITY
+Detect:
+•	exploding graph features
+•	NaNs in adjacency or embeddings
+MUST FIX:
+•	normalization
+•	clipping
+________________________________________
+9. 🚀 GPU / MEMORY OPTIMIZATION
+MUST CHECK:
+•	graph tensors on GPU
+•	no CPU↔GPU transfers mid-pipeline
+FLAG:
+•	large dense adjacency matrices ❌
+•	unnecessary tensor duplication ❌
+________________________________________
+10. 🧹 UNUSED / DEAD GRAPH CODE
+Detect:
+Module: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+11. 🧪 MULTI-TASK COMPATIBILITY
+Ensure graph supports:
+•	all tasks (bias, ideology, narrative, etc.)
+•	no task-specific hardcoding
+________________________________________
+12. 🧪 EDGE CASES
+Check:
+•	empty graph
+•	single-node graph
+•	large graphs
+•	disconnected components
+________________________________________
+13. ⚙️ CONFIG INTEGRATION
+MUST VERIFY:
+•	graph parameters configurable:
+o	max nodes
+o	edge types
+o	feature dims
+•	no hardcoded graph logic
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL GRAPH BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why graph is incorrect:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. SEMANTIC ISSUES
+________________________________________
+🧩 4. TOKEN / ENTITY ALIGNMENT ISSUES
+________________________________________
+🚀 5. GPU / MEMORY ISSUES
+________________________________________
+🔄 6. RECOMPUTATION ISSUES
+________________________________________
+🧹 7. UNUSED GRAPH MODULES
+________________________________________
+⚙️ 8. CONFIG ISSUES
+________________________________________
+🧪 9. EDGE CASE FAILURES
+________________________________________
+✅ 10. VERIFIED COMPONENTS
+________________________________________
+📉 11. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST ensure graph correctness
+•	MUST enforce batching
+•	MUST eliminate recomputation
+•	MUST validate alignment
+________________________________________
+🎯 SUCCESS CRITERIA (GRAPH LAYER)
+A system where:
+•	Graph structure is correct + meaningful ✅
+•	Node/entity alignment is perfect ✅
+•	Graph construction is efficient ✅
+•	Fully batch-optimized ✅
+•	No redundant computation ✅
+•	Scales to large inputs ✅
+________________________________________
+🔥 WHY THIS VERSION IS SUPERIOR
+•	Targets structured reasoning layer (often ignored)
+•	Enforces graph correctness + semantics
+•	Prevents massive performance issues
+•	Aligns graph with rest of pipeline
+•	Ensures scalability
+

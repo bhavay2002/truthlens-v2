@@ -1,0 +1,294 @@
+Great — this is a **real full-dataset run**, and now your logs are revealing the **next layer of problems (not basic ones anymore)**. Let’s break it down precisely.
+
+---
+
+# ✅ First — Good News (Very Important)
+
+```text
+bias             2172 samples  
+ideology         9883 samples  
+propaganda       4067 samples  
+narrative_frame  1109 samples  
+narrative        1603 samples  
+emotion          1057 samples
+```
+
+📌 
+
+👉 This proves:
+
+* ✅ You are now using **FULL datasets**
+* ❌ No more “3 samples” issue
+* ✅ Data pipeline is correctly wired
+
+---
+
+# 🚨 Now — Real Problems (from your logs)
+
+These are **not beginner bugs anymore**. These are **system-level issues**.
+
+---
+
+# ❌ 1. Explainability is FAILING (major issue)
+
+Repeated error:
+
+```text
+ExplanationAggregator: no sources provided
+final_token_importance cannot be empty
+```
+
+📌 
+
+---
+
+## 🧠 Meaning
+
+Your explainability pipeline:
+
+```text
+model → attribution → aggregation
+```
+
+👉 is breaking because:
+
+* no attention/SHAP outputs generated
+* aggregator receives **empty inputs**
+
+---
+
+## 🎯 Root cause
+
+Most likely:
+
+```python
+token_importance = []  ❌
+```
+
+---
+
+## ✅ Fix
+
+In:
+
+```text
+src/explainability/explanation_aggregator.py
+```
+
+Add fallback:
+
+```python
+if not sources:
+    return {"final_token_importance": None}
+```
+
+---
+
+# ❌ 2. Emotion Target Analyzer CRASH (critical bug)
+
+```text
+AttributeError: Token has no attribute 'ent_start'
+```
+
+📌 
+
+---
+
+## 🧠 Root cause
+
+You are using:
+
+```python
+token.ent_start  ❌
+token.ent_end    ❌
+```
+
+👉 These **DO NOT exist in spaCy Token**
+
+---
+
+## ✅ Correct usage
+
+Replace with:
+
+```python
+token.ent_iob_   # IOB tag
+token.ent_type_  # entity type
+```
+
+---
+
+## 🔧 Fix in:
+
+```text
+src/analysis/emotion_target_analysis.py
+```
+
+Replace:
+
+```python
+token.doc[token.ent_start: token.ent_end]
+```
+
+WITH:
+
+```python
+if token.ent_iob_ != "O":
+    span = token.doc[token.i: token.i+1]
+```
+
+---
+
+# ❌ 3. Feature anomalies (warning spam)
+
+```text
+feature_anomaly_detected
+```
+
+📌 
+
+---
+
+## Meaning:
+
+* distribution mismatch
+* extreme values
+* empty features
+
+👉 Not fatal, but signals instability
+
+---
+
+# ❌ 4. Explainability running repeatedly (performance issue)
+
+```text
+Running explainability pipeline (hundreds of times)
+```
+
+👉 You are running explainability **per sample**
+
+---
+
+## 🚨 Problem
+
+With:
+
+```text
+~10,000 samples
+```
+
+👉 This becomes:
+
+* VERY slow
+* redundant
+* unnecessary
+
+---
+
+## ✅ Fix
+
+Run explainability only on subset:
+
+```python
+if i < 50:
+    run_explainability()
+```
+
+---
+
+# 🧠 What this means overall
+
+---
+
+## ✅ What is WORKING
+
+* Data loading (full datasets) ✅
+* Model inference ✅
+* Pipeline orchestration ✅
+* GPU usage ✅
+
+---
+
+## ❌ What is BROKEN
+
+| Component                    | Issue                |
+| ---------------------------- | -------------------- |
+| Explainability               | empty outputs        |
+| Emotion analyzer             | crash (spaCy misuse) |
+| Aggregation (explainability) | invalid inputs       |
+| Monitoring                   | anomaly spam         |
+
+---
+
+# 🎯 Final Diagnosis
+
+> 🔥 You have moved from **pipeline debugging → module-level debugging**
+
+This is advanced stage.
+
+---
+
+# 🚀 What you should do NOW (priority order)
+
+---
+
+## 🥇 FIX 1 — Emotion analyzer (critical)
+
+Fix:
+
+```text
+token.ent_start → REMOVE
+```
+
+---
+
+## 🥈 FIX 2 — Explainability aggregator
+
+Handle empty inputs safely
+
+---
+
+## 🥉 FIX 3 — Limit explainability
+
+Run only on subset
+
+---
+
+## 🟡 FIX 4 — Ignore feature_anomaly (for now)
+
+Not blocking
+
+---
+
+# 🎯 Final Answer
+
+* ✅ You are now using FULL dataset correctly
+* ❌ Your system is breaking in:
+
+  * explainability
+  * spaCy-based analyzer
+* ❌ These are NOT training issues
+
+---
+
+# 💡 Big Insight
+
+Earlier problems = **data + wiring**
+
+Now problems = **module correctness**
+
+👉 This is actually **good progress**
+
+---
+
+# 👍 If you want next step
+
+I can:
+
+* fix your `emotion_target_analysis.py` completely
+* patch explainability pipeline properly
+* optimize pipeline for full dataset
+
+Just say:
+👉 “fix emotion analyzer fully” or
+👉 “fix explainability pipeline”

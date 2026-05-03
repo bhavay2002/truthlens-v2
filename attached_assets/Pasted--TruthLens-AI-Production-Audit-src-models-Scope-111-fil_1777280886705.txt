@@ -1,0 +1,281 @@
+🔍 TruthLens AI — Production Audit: src/models/
+Scope: 111 files, ~25 subdirectories
+Verdict: Multiple runtime-fatal bugs in core multi-task / registry / checkpointing paths. Numerical-stability and GPU-efficiency issues in every classification head. Filename swaps in encoder/ and calibration/ mask broken module identity. Not production-ready.
+________________________________________
+🔴 CRITICAL BUGS — will crash, corrupt training, or silently produce wrong outputs
+C1 — MultiTaskTruthLensModel(config=...) crashes on every load
+Files: registry/model_registry.py:64, registry/model_factory.py:133, multitask/multitask_truthlens_model.py:__init__
+# model_registry.py L64
+model = MultiTaskTruthLensModel(config=model_cfg)
+# model_factory.py L133
+model = MultiTaskTruthLensModel(MultiTaskTruthLensConfig(**merged))
+# but multitask_truthlens_model.MultiTaskTruthLensModel.__init__ signature is:
+def __init__(self, encoder: nn.Module, task_heads: Dict[str, nn.Module]):
+Effect: TypeError: __init__() missing 2 required positional arguments: 'encoder' and 'task_heads'. Every code path that goes through ModelRegistry.load_model for model_type=="multitask_truthlens" (the primary public model) is dead.
+Fix:
+def __init__(self, encoder=None, task_heads=None, *, config: MultiTaskTruthLensConfig | None = None):
+    if config is not None and (encoder is None or task_heads is None):
+        encoder, task_heads = build_from_config(config)
+    super().__init__(encoder=encoder, task_heads=task_heads)
+    self.config = config
+Then make from_model_config the single public entry that constructs both.
+C2 — TruthLensMultiTaskModel.__init__ calls wrong super signature
+File: multitask/multitask_model.py
+super().__init__(config)                # parent expects (encoder, task_heads)
+Effect: instantiation crashes; this entire alternate multitask class is dead code that masquerades as a public API.
+Fix: Either delete the class (duplicated by MultiTaskTruthLensModel) or change to super().__init__(encoder=self._build_encoder(config), task_heads=self._build_heads(config)).
+C3 — MultiTaskTruthLensModel.from_model_config does not exist
+File: registry/model_factory.py:189
+return MultiTaskTruthLensModel.from_model_config(model_config)
+No such classmethod is defined in multitask/multitask_truthlens_model.py. create_from_yaml → create_from_model_config → AttributeError.
+Fix: Add the classmethod; use it in _load_multitask_model too.
+C4 — MultiTaskTruthLensModel.forward asserts head returns Tensor but heads return dict
+File: multitask/multitask_truthlens_model.py (forward), vs heads/classification_head.py, heads/multilabel_head.py
+out = head(pooled)                       # ClassificationHead returns {"logits", "entropy", ...}
+assert torch.is_tensor(out)              # AssertionError
+Effect: every multi-task forward pass crashes the moment a ClassificationHead / MultiLabelHead is used.
+Fix: logits = out["logits"] if isinstance(out, dict) else out.
+C5 — validator.REQUIRED_PREFIXES is incompatible with the actual multitask state-dict
+File: checkpointing/validator.py:15
+REQUIRED_PREFIXES = ["encoder", "bias_head", "ideology_head",
+                     "propaganda_head", "narrative_head", "emotion_head"]
+MultiTaskBaseModel stores heads as nn.ModuleDict({"bias": ..., "ideology": ...}), so keys are task_heads.bias.*, task_heads.ideology.*. Validator therefore raises ValueError: Missing required components: [...] on every legitimate multitask checkpoint save (CheckpointManager.save calls it unconditionally at L94).
+Fix:
+REQUIRED_PREFIXES = ["encoder", "task_heads"]
+# OR pass model.required_prefixes() into validate_checkpoint(...)
+C6 — BiasClassifier.predict (and all 4 sibling task classifiers) leaves model in eval() permanently
+File: tasks/bias/bias_classifier.py:181 (and ideology / propaganda / narrative / emotion)
+@torch.inference_mode()
+def predict(self, ...):
+    self.eval()                          # ← no try/finally; never restored
+    outputs = self.forward(...)
+    return {...}
+Effect: any training loop that calls model.predict(...) for periodic validation flips dropout/batchnorm off for the rest of training. Silent quality regression.
+Fix:
+prev = self.training
+self.eval()
+try:
+    outputs = self.forward(...)
+finally:
+    self.train(prev)
+C7 — Temperature scaling applied inside training forward
+File: every per-task classifier (bias, ideology, propaganda, narrative, emotion)
+self.temperature = nn.Parameter(torch.ones(1))     # learnable
+...
+logits = logits / temperature                       # divides logits in TRAIN
+loss = self.loss_fn(logits, labels.long())          # CE on scaled logits
+Effects (all wrong):
+1.	temperature becomes a learnable inverse gradient scaler → optimizer trivially drives it to maximize loss landscape curvature → training instability.
+2.	The post-hoc calibration premise is destroyed (you can never recover a calibrated T* because the head was trained against scaled logits).
+3.	With clamp(0.5, 5.0) the gradient through clamp saturates at boundaries, masking the bug from NaN detection.
+Fix:
+if self.training:
+    scaled_logits = logits          # no scaling in train
+else:
+    scaled_logits = logits / self.temperature.detach().clamp(0.5, 5.0)
+loss = self.loss_fn(logits, labels.long())   # CE on RAW logits
+C8 — encoder/transformer_encoder.py is a duplicate of encoder_factory.py
+File: encoder/transformer_encoder.py
+Both files define the same EncoderFactory class. The actual TransformerEncoder nn.Module lives elsewhere (inference/model_wrapper.py). This is a filename swap that causes:
+•	Anyone doing from src.models.encoder.transformer_encoder import TransformerEncoder gets ImportError.
+•	Two divergent copies of EncoderFactory will drift; whichever loads first wins.
+Fix: Move TransformerEncoder definition into encoder/transformer_encoder.py; delete the duplicate EncoderFactory from that file; keep encoder_factory.py as the single factory source.
+C9 — calibration/ has the same filename-swap pathology
+Files: calibration/__init__.py:20, calibration/temperature_scaling.py, calibration/isotonic_calibration.py
+•	IsotonicCalibrator is defined in temperature_scaling.py
+•	CalibrationMetrics is defined in isotonic_calibration.py
+•	TemperatureScaler is re-imported from src.evaluation.calibration
+__init__.py even contains a comment apologising for the swap. This will silently break any downstream import that targets the obvious filename.
+Fix: Move classes into the file matching their name; delete cross-file noqa: F401 re-exports.
+C10 — ArtifactManager.load_model uses torch.load without weights_only=True
+File: checkpointing/model_loader.py:244
+checkpoint = torch.load(path)
+PyTorch ≥2.4 emits FutureWarning; ≥2.6 default flips → load fails. Also a remote-code-execution surface because checkpoints can be pickled by external producers.
+Fix: torch.load(path, map_location="cpu", weights_only=True).
+C11 — EnsembleModel._majority_vote returns vote counts that get softmaxed
+File: ensemble/ensemble_model.py:99–123
+logits = self._majority_vote(stacked)         # returns vote-count tensor in [0, N]
+probs  = F.softmax(logits, dim=-1)             # softmax of integer counts
+entropy= -sum(probs*log(probs+1e-12))          # nonsense
+The predictions are correct (argmax of votes), but the returned probabilities, confidence, and entropy are mathematically meaningless, and downstream Predictor will report bogus confidences.
+Fix: Return vote_counts / vote_counts.sum(-1, keepdim=True) as probabilities directly; do not softmax counts.
+C12 — architectures/HybridTruthLensModel head shapes contradict task-head class definitions
+Task	HybridTruthLensModel out_features	<Task>Classifier.NUM_CLASSES	prediction_output._MULTICLASS_TASKS
+bias	1	2	"bias" ∈ multiclass
+propaganda	1	2	"propaganda" ∈ multiclass
+ideology	3	3	✓
+emotion	3	20 (NUM_EMOTIONS)	–
+narrative	5	11 (LABELS)	–
+frame	3	–	–
+sentiment_score (regression)	1	–	–
+Effect: Any checkpoint produced by HybridTruthLensModel is incompatible with the per-task classifiers, with BiasClassifier.get_output_labels() (binary), and with PredictionOutput's assumed multiclass routing. Running data → loss → metrics will silently mis-shape gradients (BCEWithLogits vs CE) depending on which model object loaded the weights.
+Fix: Choose a single source of truth (recommend deriving all head shapes from MultiTaskModelConfig.tasks[name].num_labels); kill hardcoded numbers in HybridTruthLensModel.
+________________________________________
+🟠 PERFORMANCE — wasted compute / wrong device behavior
+P1 — Softmax + argmax + max + entropy computed on every TRAINING forward
+Affected: heads/classification_head.py, heads/multilabel_head.py, base/multitask_base_model.py, base/base_classifier.py, every per-task classifier (bias/ideology/propaganda/narrative/emotion), and EnsembleModel.forward.
+For a B=64, C=20 (emotion) batch every step you pay:
+•	1× softmax (BCH ops)
+•	1× argmax
+•	1× max
+•	1× entropy (probs * log(probs+1e-12) → 2 extra BCH passes)
+≈ 5 extra elementwise tensor ops per head per step that are never used by the loss.
+Fix: Wrap derived statistics in if not self.training: or compute lazily in a derive_stats(outputs) helper called only in eval/inference paths.
+P2 — EnsembleModel.forward does model.to(self.device) per call
+File: ensemble/ensemble_model.py:77
+for model in self.models:
+    model = model.to(self.device)        # every forward!
+On CPU it's a no-op; on GPU each call traverses the parameter list to verify residency, costing ~ms per submodel, multiplied by every batch.
+Fix: Move once in __init__/add_model.
+P3 — Per-task classifiers unconditionally enable gradient checkpointing at construction
+if hasattr(self.encoder, "gradient_checkpointing_enable"):
+    self.encoder.gradient_checkpointing_enable()
+Forces ≈30–40 % per-step latency penalty even at inference and on small models where it's pointless. Should be config-gated.
+Fix: add enable_gradient_checkpointing: bool = False to each task config; only call when training and flag set.
+P4 — encoder_factory.create_transformer_encoder is invoked 5× when building the multitask model the wrong way
+If a caller instantiates each <Task>Classifier separately (the registry does!), each instance creates its own RoBERTa (≈125 M params). Memory: 5 × 480 MB = ~2.4 GB instead of the intended 480 MB shared.
+Fix: Route all multitask construction through MultiTaskTruthLensModel.from_model_config with a single shared encoder.
+P5 — MultiTaskHead mutates the dict returned by sub-heads
+File: heads/multitask_head.py
+The dict is the sub-head's local return value but in the multitask model it gets .updated with task name suffixes, so concurrent calls (e.g. DDP gradient hooks running async) can race on shared dict instances if a head ever caches outputs.
+Fix: out = dict(head(pooled)) before mutation.
+________________________________________
+🟡 ARCHITECTURE — design smells, coupling
+A1 — Task classifiers import from src.training
+# tasks/bias/bias_classifier.py L20-21
+from ....training.loss_functions import LossConfig, LossFactory
+from ....training.trainer import Trainer, TrainerConfig
+models/ should not depend on training/. Creates a circular layer concern; prevents using the model as a pure inference artifact (you can't import it without pulling in trainer/optimizer modules).
+Fix: Inject loss_fn from outside; move create_trainer to training/trainer_factory.py.
+A2 — EncoderConfig whitelist drift
+encoder/encoder_config.py validates pooling ∈ {cls, mean, attention} but representation/pooling.py PoolingFactory also supports max. A user passing pooling="max" is rejected at config validation despite the factory supporting it. Inconsistent contract.
+A3 — representation/pooling.py mask uses -1e9
+Should be torch.finfo(dtype).min for fp16/bf16 safety (-1e9 is -inf after fp16 cast — actually fine — but on bf16 it underflows to -inf only for some kernels; explicit finfo is the documented idiom and matches HF Transformers).
+scores = scores.masked_fill(mask == 0, torch.finfo(scores.dtype).min)
+(representation/attention_pooling.py:54 already does it correctly with float("-inf"); representation/pooling.py does not.)
+A4 — NarrativeDetector LABELS mix three semantic layers
+hero / villain / victim (role) ∪ entities ∪ frame codes (RE/HI/CO/MO/EC) inside one multilabel head, while HybridTruthLensModel expects narrative and frame to be separate tasks. Either split the head or document the semantic conflation explicitly.
+A5 — BaseModel.load_checkpoint defaults to strict=False
+Silent missing-key acceptance at the model layer contradicts the strict checks added in CheckpointManager.load. Pick one rule, enforce it everywhere.
+A6 — Two MultiTaskTruthLensConfig shapes
+multitask_truthlens_model.MultiTaskTruthLensConfig accepts (model_name, dropout, pooling, init_from_config_only) while config/model_config.MultiTaskModelConfig is the structured version. The naming collision will mislead future maintainers.
+________________________________________
+🧠 LOSS / NUMERICAL CORRECTNESS
+N1 — Entropy computed via probs * log(probs + 1e-12) everywhere
+Files: multitask_base_model.py, base_classifier.py, heads/classification_head.py, heads/multilabel_head.py, inference/prediction_output.py, ensemble_model.py, uncertainty/mc_dropout.py.
+Why wrong: When the model is highly confident (p_max → 1, others → 0), log(p+1e-12) of the dominant class is ≈ 0 (good) but the subdominant probs all become 1e-12 · log(1e-12) ≈ -2.76e-11, summed over C classes → numerically dominated by the EPS term, not by the true distribution. Use log_softmax directly:
+log_probs = F.log_softmax(logits, dim=-1)
+probs     = log_probs.exp()
+entropy   = -(probs * log_probs).sum(-1)            # exact, no EPS
+(Bonus: avoids the second softmax pass.)
+N2 — KnowledgeDistillationLoss ignores ignore_index
+F.cross_entropy(student_logits, labels) will count -100 labels as class index -100 and crash or pollute the loss. Multi-task labels routinely use ignore_index=-100.
+Fix: F.cross_entropy(..., ignore_index=-100).
+N3 — EMACoverageTracker.weight 1/cov amplification
+multiplier = min(1.0/cov, cap) with floor=0.05, cap=10 → multiplier swings between 1 and 10 with no smoothing. A task that becomes rare for 50 steps gets its loss × 10 instantly → gradient explosion.
+Fix: sqrt-temper: multiplier = min(sqrt(target_cov / cov), cap) (target_cov = mean coverage).
+N4 — CalibrationMetrics._to_probs heuristic
+if x.max() > 1 or x.min() < 0: return softmax(x, dim=1)
+Detects "logits vs probs" by value range. A pathologically small-logit model with logits ∈ [0,1] will be misclassified as already-probs → ECE silently wrong. Caller should pass an explicit is_logits flag.
+N5 — CalibrationMetrics.negative_log_likelihood uses log(p+1e-12) instead of log_softmax
+Same issue as N1 in the prob-input branch.
+N6 — loss/multitask_loss.py gradnorm.combine reads task_losses[t] without KeyError guard
+If a task is dropped from the active task set on a given step (e.g. dataset shard has no labels), combine raises KeyError mid-backward. Should .get(t, 0.0) and skip.
+________________________________________
+🚀 GPU / DEVICE / DTYPE
+G1 — attention_pooling.py uses float("-inf") on scores.masked_fill
+Correct for fp32, but with autocast-bf16, softmax(-inf) over an all-padding row → nan. Combined with the unconditional tanh(self.proj(...)) upstream, this creates NaN propagation in mixed-precision training when a row is fully padded. Use torch.finfo(scores.dtype).min and add a "row-all-masked → uniform fallback" guard.
+G2 — MCDropoutPredictor.predict_with_uncertainty keeps logits on GPU but converts to numpy per sample
+samples.append(_to_numpy(probs)) does T (e.g. 30) D2H syncs per call. For batch 64 × 20 classes × 30 samples = ~150 KB but each .cpu() is a CUDA stream sync, killing throughput.
+Fix: Stack on device, do a single .cpu().numpy() at the end.
+G3 — EnsembleModel device is an init-time str
+After EnsembleConfig(device="cpu"), you can't move the wrapper to GPU later — model.to("cuda") works on submodels, but self.device stays "cpu" so forward sends them back. Use next(self.parameters()).device in forward.
+G4 — temperature parameter never excluded from optimizer
+Even after fix C7, nn.Parameter(torch.ones(1)) will be picked up by model.parameters(). The trainer must either (a) freeze it during pretraining, or (b) place it in a separate parameter group with lr=0 until the calibration phase. Currently nothing in models/ makes this contract visible.
+________________________________________
+🔄 RECOMPUTATION / DEAD WORK
+Where	What is recomputed unnecessarily	Cost
+ClassificationHead.forward	softmax, argmax, max, entropy during training	4 ops × every step
+MultiLabelHead.forward	sigmoid, predictions, entropy during training	3 ops × every step
+MultiTaskBaseModel.forward	re-computes per-head softmax already produced by the head	2× work per task
+BaseClassifier.forward	derived stats while training	dead during loss.backward
+EnsembleModel.forward	softmax+argmax+entropy on the averaged logits even when caller only wants logits (return_probabilities=False path still computes them)	wasted on every batch
+Predictor._calibrate (per inference/predictor.py)	swallows exceptions silently → hidden recompute fallbacks	obscures bugs
+Pattern fix: introduce one derive_stats(logits, task_type) utility used by predict() paths only; remove inline derivations from every forward().
+________________________________________
+🧹 UNUSED / DEAD CODE
+•	multitask/multitask_model.py — TruthLensMultiTaskModel is unreachable (C2). Delete or repair.
+•	encoder/transformer_encoder.py — duplicates encoder_factory.py (C8).
+•	calibration/temperature_scaling.py — does NOT contain a TemperatureScaler; misleading filename (C9).
+•	calibration/isotonic_calibration.py — does NOT contain IsotonicCalibrator; cross-imports it from temperature_scaling.py (C9).
+•	loss/multitask_loss.py — task_loss_router and gradnorm.combine paths are imported but the multitask model never wires them in (verified by reading multitask_truthlens_model.forward). Either remove or hook up.
+•	KnowledgeDistillationLoss.feature_loss / attn_loss — only triggered by string keys "features" / "attentions" in outputs; no model in the repo emits those keys → permanently dead.
+•	BiasClassifier.create_trainer (and 4 siblings) — couple models/ to training/ for a function that belongs in training/.
+________________________________________
+⚙️ CONFIG INTEGRATION
+CFG1 — HybridTruthLensModel ignores config entirely
+self.bias_head = nn.Linear(H, 1)         # hardcoded
+self.ideology_head = nn.Linear(H, 3)
+...
+No dropout, no num_labels from config, no head init (no nn.init.xavier_*), no pre-fusion dropout. Should accept a MultiTaskModelConfig and build heads from tasks[name].num_labels.
+CFG2 — MultiTaskTruthLensConfig has TWO definitions
+Already noted in A6. The one used by registry (multitask_truthlens_model.MultiTaskTruthLensConfig) accepts a free-form **kwargs shape (per the comment in scratchpad — verified: init_from_config_only=True is silently swallowed). This means typo configs never raise.
+CFG3 — EncoderConfig pooling whitelist drifts (A2).
+CFG4 — BiasClassifierConfig (and 4 siblings) duplicates fields already in MultiTaskModelConfig
+model_name, pooling, dropout, device, regression fields all live in both places. Source-of-truth ambiguity → easy to load with mismatched encoders.
+CFG5 — gradient_checkpointing is not in any config (P3); hardcoded on at construction.
+CFG6 — temperature_scaling lives in models/ but the actual implementation in src.evaluation.calibration — circular layering between models/ and evaluation/.
+________________________________________
+🧪 EDGE CASES NOT HANDLED
+#	Scenario	Current behavior	Should be
+E1	Empty batch (B=0)	predict_proba, _majority_vote divide by zero or stack of zero tensors → RuntimeError	early-return empty dict
+E2	All-padding row in MeanPooling	denom.clamp(1e-6) returns near-zero → exploded values	mask whole row, return zero or last non-pad token
+E3	All-padding row in AttentionPooling	softmax([-inf,...]) → NaN	uniform fallback or zero pooled
+E4	labels=None + multitask forward	works	OK ✅
+E5	labels.dim() != 1 in BiasClassifier	ValueError	OK ✅ but message lacks shape
+E6	Half-precision encoder + fp32 head	no autocast guard	wrap heads in torch.autocast aware code
+E7	DDP with EMACoverageTracker	per-rank divergence (no all_reduce of _coverage)	gather across ranks each step
+E8	Checkpoint missing task_heads.<name> after task added	load_state_dict(strict=False) accepts → silent inference of random head	log + raise unless explicit allow_missing_heads=True
+E9	CalibrationMetrics.expected_calibration_error with n_bins > N samples	bins empty → returns 0 (looks perfect!)	warn
+E10	IsotonicCalibrator.predict_proba with 1-D probs	reshapes to 2-class but original _num_classes may differ → silently wrong	validate before reshape
+E11	MCDropoutPredictor with model that has no Dropout layers	_enable_dropout is no-op → all T samples identical → variance=0 → uncertainty=0	warn / raise
+E12	KnowledgeDistillationLoss with ignore_index labels	crash (N2)	pass ignore_index
+E13	EnsembleModel with mixed task heads (regression + classification)	softmax over regression output → garbage	type-aware reduction
+________________________________________
+✅ VERIFIED CORRECT
+•	representation/cls_pooling.py — clean, correct CLS extraction with optional LayerNorm/Dropout. ✅
+•	representation/mean_pooling.py — correct masked mean with clamp(min=1e-6) denom. ✅
+•	loss/uncertainty.py (uncertainty-weighted multi-task loss, σ̂² parameterization) — mathematically correct, log-variance form avoids exp instability. ✅
+•	loss/coverage_tracker.py — EMA update math is correct (just amplification choice is risky — N3). ✅
+•	checkpointing/io_utils.py atomic_save (write-temp + rename + fsync) — correct durable write pattern. ✅
+•	checkpointing/integrity.py (sha256 metadata) — correct verify-on-load semantics. ✅
+•	KnowledgeDistillationLoss KL term T*T scaling — correct (Hinton 2015). ✅
+•	inference/prediction_output.py task-type routing logic (apart from N1) — multi-class / multi-label / regression branches are correctly separated. ✅
+•	IsotonicCalibrator.fit per-class loop with optional sum-normalization — correct. ✅
+•	representation/attention_pooling.py mask + softmax — correct (apart from G1 fp16 edge case). ✅
+________________________________________
+📉 FINAL SCORE
+Dimension	Score	Notes
+Architecture correctness	3 / 10	C1, C2, C3, C4, C12 = primary multitask path is dead
+Multi-task design	4 / 10	shared encoder unused in per-task path; head shapes inconsistent
+Loss correctness	5 / 10	core CE/BCE/Reg correct; KD ignore_index, entropy via EPS-log
+Numerical stability	4 / 10	EPS-log entropy in 7 files; bf16 mask not safe
+GPU efficiency	5 / 10	per-batch device transfers, recomputation in train mode
+Recomputation elimination	3 / 10	every head recomputes 4–5 ops on every train step
+Token alignment / pooling	7 / 10	correct except A3/G1 mask edge cases
+Model registry	2 / 10	C1, C3, C5, C10 — load path crashes or silently corrupts
+Train/inference consistency	3 / 10	C6, C7 (temperature in train), eval-mode leak
+Edge cases	4 / 10	empty batch, all-pad, no-dropout MC, DDP coverage all unhandled
+Config integration	4 / 10	hardcoded shapes, double config classes, GC unconfigurable
+Code hygiene	4 / 10	filename swaps in encoder/ and calibration/; dead duplicate classes
+Overall: 4.0 / 10 — not production-ready
+Top 7 fixes to unblock production (ordered)
+1.	C1 + C3 — make MultiTaskTruthLensModel(config=...) and from_model_config actually work.
+2.	C4 — make multitask forward tolerate dict head outputs.
+3.	C5 — repair validator.REQUIRED_PREFIXES to match the actual state-dict keys.
+4.	C6 — try/finally around self.eval() in every predict().
+5.	C7 — move temperature scaling out of training forward.
+6.	C12 — derive head out-features from MultiTaskModelConfig.tasks[name].num_labels; delete hardcoded numbers in HybridTruthLensModel.
+7.	C8 + C9 — resolve filename swaps in encoder/ and calibration/; delete duplicate EncoderFactory.
+After these seven, the next batch (P1, N1, P3, A1, G1) is mechanical refactor work that can be tracked as a single "remove training-time recomputation + numerical hardening" task.
+

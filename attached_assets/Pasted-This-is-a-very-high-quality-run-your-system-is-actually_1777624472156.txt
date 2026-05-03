@@ -1,0 +1,325 @@
+This is a **very high-quality run**—your system is actually **working end-to-end**, but you now have **evaluation-layer inconsistencies**, not model/pipeline failures.
+
+Let’s break it down cleanly.
+
+---
+
+# ✅ What is WORKING (Important)
+
+From your run:
+
+```text
+Pipeline total: 18 articles in 6.22s
+Model checkpoint: loaded
+All pipeline stages completed without errors
+```
+
+
+
+👉 This means:
+
+* ✔ Model loads correctly
+* ✔ Inference works
+* ✔ Analysis + graph + aggregation all working
+* ✔ End-to-end pipeline stable
+
+👉 You are **past the “build phase”** — now in **alignment/debug phase**
+
+---
+
+# 🚨 Real Problems (Now Clearly Visible)
+
+## 1. ❌ Evaluation KeyError
+
+```text
+KeyError: 'ideology'
+KeyError: 'bias'
+```
+
+👉 Cause:
+
+Your `labels` dict does **not contain all tasks** during evaluation.
+
+---
+
+## 2. ❌ Shape mismatch (critical)
+
+```text
+y_true (3, 3) vs y_pred (3,)
+```
+
+
+
+👉 Meaning:
+
+| Component          | Shape                   |
+| ------------------ | ----------------------- |
+| Labels (narrative) | multi-label (3 classes) |
+| Predictions        | single-label            |
+
+👉 Your model head ≠ evaluation expectation
+
+---
+
+## 3. ⚠️ Class mismatch
+
+```text
+y_pred contains classes not in y_true
+```
+
+👉 Indicates:
+
+* label encoding mismatch
+* or missing classes in small batch
+
+---
+
+## 4. ⚠️ Feature anomalies
+
+```text
+feature_anomaly_detected
+```
+
+👉 Not breaking—but indicates:
+
+* scaling issues
+* unusual feature distributions
+
+---
+
+# 🧠 Root Cause (Big Picture)
+
+You have a **multi-task system**, but:
+
+👉 Evaluation assumes:
+
+```text
+ALL tasks available simultaneously
+```
+
+👉 But your test pipeline runs:
+
+```text
+ONE dataset at a time
+```
+
+---
+
+# 🔥 Why This Breaks
+
+Example:
+
+### Running “bias dataset”
+
+```python
+labels = {
+  "bias": [...]
+}
+```
+
+But evaluation tries:
+
+```python
+labels["ideology"]  ❌ → KeyError
+```
+
+---
+
+# ✅ FIX 1 — Filter tasks during evaluation (MOST IMPORTANT)
+
+## 🔧 In:
+
+```text
+src/evaluation/evaluation_pipeline.py
+```
+
+### Replace:
+
+```python
+for task in tasks:
+    y_true = labels[task]
+```
+
+### With:
+
+```python
+for task in tasks:
+    if task not in labels:
+        continue
+    y_true = labels[task]
+```
+
+---
+
+# ✅ FIX 2 — Fix narrative shape mismatch
+
+You have:
+
+```text
+labels → (3,3)   → multilabel
+preds  → (3,)    → single label
+```
+
+---
+
+## 🔧 Option A (correct long-term)
+
+Make model output multilabel:
+
+```python
+sigmoid → threshold → multi-hot vector
+```
+
+---
+
+## 🔧 Option B (quick fix)
+
+Convert labels → single class:
+
+```python
+labels = np.argmax(labels, axis=1)
+```
+
+---
+
+# ✅ FIX 3 — Align evaluation mode per task
+
+Define task types:
+
+```python
+TASK_TYPE = {
+    "bias": "multiclass",
+    "ideology": "multiclass",
+    "propaganda": "binary",
+    "narrative": "multilabel",
+    "emotion": "multilabel",
+}
+```
+
+Then:
+
+```python
+if TASK_TYPE[task] == "multilabel":
+    use multilabel metrics
+else:
+    use classification metrics
+```
+
+---
+
+# ✅ FIX 4 — Fix test pipeline design (IMPORTANT)
+
+Your current flow:
+
+```text
+Run dataset → evaluate ALL tasks ❌
+```
+
+---
+
+## Correct flow:
+
+```text
+Run dataset → evaluate ONLY that task ✅
+```
+
+---
+
+# 🔧 Modify here:
+
+```text
+run_test_pipeline.py
+```
+
+Pass only relevant labels:
+
+```python
+evaluation = run_evaluation_pipeline(
+    predictions=preds,
+    labels={task: labels[task]}
+)
+```
+
+---
+
+# 🚀 What You Have Achieved (Big Deal)
+
+You now have:
+
+| Component   | Status             |
+| ----------- | ------------------ |
+| Training    | ✅                  |
+| Inference   | ✅                  |
+| Pipeline    | ✅                  |
+| Aggregation | ✅                  |
+| Graph       | ✅                  |
+| Evaluation  | ⚠️ needs alignment |
+
+---
+
+👉 This is **90% complete system**
+
+---
+
+# 🔥 What You Should Do NEXT
+
+## Step 1 (mandatory)
+
+Fix evaluation filtering
+
+## Step 2
+
+Fix narrative shape mismatch
+
+## Step 3
+
+Run:
+
+```bash
+python run_test_pipeline.py
+```
+
+---
+
+## Step 4 (after stable eval)
+
+Turn on explainability:
+
+```bash
+--explainability
+```
+
+---
+
+## Step 5
+
+Start API + frontend
+
+---
+
+# 🧠 Final Insight
+
+You are no longer debugging:
+
+* environment ❌
+* training ❌
+
+👉 You are now doing **system integration tuning**
+
+---
+
+# 🔥 Bottom Line
+
+* ❌ Not a model problem
+* ❌ Not a pipeline failure
+* ✅ Evaluation logic mismatch
+
+---
+
+If you want, I can:
+
+* refactor your **evaluation pipeline (clean multi-task aware design)**
+* or align your **dataset schema + model heads perfectly**
+* or help you move to **API + frontend stage now**
+
+Just tell me 👍

@@ -1,0 +1,231 @@
+Great question—that’s exactly the right mindset now. You don’t just want to fix *this* bug, you want to **prevent future ones**. Let’s set you up with a **robust testing workflow + prompts** so your pipeline doesn’t break again.
+
+---
+
+# 🎯 Goal
+
+You want to:
+
+* test on **self-created data**
+* catch bugs **early**
+* validate **every stage (predictor → evaluation)**
+
+---
+
+# 🧠 Core Idea
+
+You must always test with:
+
+```text
+INPUT TEXT → EXPECTED LABEL → MODEL OUTPUT → METRIC CHECK
+```
+
+👉 Not just “run and see logs”
+
+---
+
+# 🧪 1. Create a CLEAN Test Dataset (your own)
+
+Create a file:
+
+```bash
+data/debug_test.json
+```
+
+### ✅ Example (very important structure)
+
+```json
+[
+  {
+    "text": "The government has completely failed the people.",
+    "bias": 1,
+    "emotion": 2,
+    "propaganda": 1,
+    "ideology": 0,
+    "narrative": 1,
+    "narrative_frame": 2
+  },
+  {
+    "text": "The policy was implemented successfully with positive results.",
+    "bias": 0,
+    "emotion": 0,
+    "propaganda": 0,
+    "ideology": 1,
+    "narrative": 0,
+    "narrative_frame": 1
+  },
+  {
+    "text": "Experts claim this is a dangerous and misleading move.",
+    "bias": 1,
+    "emotion": 3,
+    "propaganda": 1,
+    "ideology": 2,
+    "narrative": 1,
+    "narrative_frame": 0
+  }
+]
+```
+
+---
+
+# 🚀 2. Prompt to TEST your system (copy-paste)
+
+Use this workflow **every time**:
+
+---
+
+## 🔥 MASTER DEBUG PROMPT
+
+```python
+texts = [x["text"] for x in data]
+labels = data  # full dict per sample
+
+results = pipeline.analyze_batch(
+    texts=texts,
+    labels=labels
+)
+
+# 🔍 DEBUG CHECKS
+for i, res in enumerate(results):
+    print("\n--- SAMPLE", i, "---")
+    
+    # 1. Check prediction keys
+    print("keys:", res["predictions"].keys())
+    
+    # 2. Check shapes
+    for task in ["bias", "emotion", "propaganda", "ideology", "narrative", "narrative_frame"]:
+        pred = res["predictions"].get(f"{task}_predictions")
+        prob = res["predictions"].get(f"{task}_probabilities")
+        
+        print(task, 
+              "pred_shape:", None if pred is None else len(pred),
+              "prob_shape:", None if prob is None else (len(prob), len(prob[0]) if len(prob)>0 else 0))
+    
+    # 3. Check metrics
+    print("metrics:", res["scores"]["tasks"]["metrics"])
+```
+
+---
+
+# 🧪 3. Add HARD VALIDATION (prevents bugs forever)
+
+Add this in your code:
+
+```python
+def validate_predictions(outputs, task):
+    import numpy as np
+    
+    y_pred = outputs[f"{task}_predictions"]
+    
+    assert isinstance(y_pred, (list, np.ndarray)), "Invalid type"
+    assert len(np.array(y_pred).shape) == 1, f"{task} must be 1D"
+```
+
+👉 Call this BEFORE evaluation
+
+---
+
+# 🚨 4. Add FAIL-FAST checks (very important)
+
+Inside evaluation:
+
+```python
+if len(np.array(y_pred).shape) != 1:
+    raise RuntimeError(f"Invalid y_pred shape for {task}: {np.array(y_pred).shape}")
+```
+
+👉 This prevents silent bugs
+
+---
+
+# 🧪 5. Golden Test Case (use this ALWAYS)
+
+Test extreme cases:
+
+### Case A — Clear bias
+
+```
+"This is a completely biased and misleading report."
+```
+
+### Case B — Neutral
+
+```
+"The report presents data from multiple sources."
+```
+
+### Case C — Emotional
+
+```
+"This shocking and outrageous decision will destroy everything!"
+```
+
+👉 If model outputs don’t differ → model issue
+
+---
+
+# 🔁 6. Regression Test (VERY powerful)
+
+Save outputs:
+
+```python
+import json
+json.dump(results, open("debug_output.json", "w"))
+```
+
+Later compare:
+
+```python
+old = json.load(open("debug_output.json"))
+new = results
+
+assert old == new, "Pipeline changed unexpectedly!"
+```
+
+---
+
+# 🧠 7. One Rule to Prevent ALL Future Bugs
+
+> 🔥 “Never pass probabilities into evaluation”
+
+Always:
+
+```python
+y_pred = outputs[f"{task}_predictions"]
+```
+
+---
+
+# 🧩 8. Debug Checklist (use every time)
+
+Before trusting output:
+
+* [ ] predictions exist for all 6 tasks
+* [ ] `*_predictions` shape = (N,)
+* [ ] `*_probabilities` shape = (N, C)
+* [ ] metrics NOT 0.0
+* [ ] no warnings like shape mismatch
+
+---
+
+# 🎯 Final Answer
+
+To avoid future bugs:
+
+* ✅ Use small controlled dataset
+* ✅ Always print shapes
+* ✅ enforce assertions
+* ✅ test all 6 tasks
+* ✅ never mix logits/probabilities with predictions
+
+---
+
+# 🚀 If you want next level
+
+I can help you:
+
+* build **automated test suite (pytest)**
+* create **synthetic dataset generator**
+* add **CI pipeline (no future regressions)**
+
+Just tell me 👍

@@ -1,0 +1,264 @@
+Your training is **actually running correctly now** — this log is very valuable. Let’s break it down precisely and then address what you *should fix next*.
+
+---
+
+# ✅ 1. System Status — GOOD
+
+From your log:
+
+* ✅ Data pipeline completed
+* ✅ Multi-task model initialized (6 tasks)
+* ✅ GPU used: **H100 (excellent)**
+* ✅ Training started successfully
+* ✅ Validation working
+* ❌ `torch.compile` skipped (expected)
+
+```text
+torch.compile failed (Dynamo is not supported on Python 3.12+)
+```
+
+
+
+👉 This is **not your bug** — it’s a **PyTorch limitation**
+
+---
+
+# ⚠️ 2. Major Observations (Important)
+
+## 🚨 (A) LR instability everywhere
+
+You have **continuous warnings**:
+
+```text
+LR reduced (factor=0.900) due to instability
+```
+
+👉 This is NOT normal at this frequency.
+
+### Root causes:
+
+* Learning rate too high
+* Gradient spikes (confirmed by logs)
+
+Example:
+
+```text
+grad_norm: 625.05
+```
+
+👉 That’s **extremely high** → unstable training
+
+---
+
+## 📉 (B) Validation improvement is VERY small
+
+| Epoch | bias  | ideology | propaganda | narrative | frame | emotion |
+| ----- | ----- | -------- | ---------- | --------- | ----- | ------- |
+| 1     | 0.808 | 0.425    | 0.920      | 0.923     | 0.652 | 0.672   |
+| 2     | 0.813 | 0.434    | 0.919      | 0.923     | 0.651 | 0.674   |
+| 3     | 0.815 | 0.433    | 0.918      | 0.923     | 0.650 | 0.674   |
+| 4     | 0.815 | 0.432    | 0.918      | 0.923     | 0.651 | 0.673   |
+
+👉 After **epoch 2 → almost plateau**
+
+---
+
+## ⚠️ (C) torch.compile
+
+Already handled correctly:
+
+```text
+falling back to eager mode
+```
+
+👉 Leave it — no action needed.
+
+---
+
+# 🎯 3. Your Goal (min_epoch=4, max=10 logic)
+
+Now your earlier requirement becomes critical:
+
+> Train at least 4 epochs, continue only if improving
+
+---
+
+# ✅ 4. What SHOULD happen now
+
+At **epoch 4**, your system should:
+
+* Check validation improvement
+* If no improvement → STOP
+* If improving → continue till 10
+
+---
+
+# ❌ But your system is currently doing:
+
+```text
+Epoch 5/10 (continues blindly)
+```
+
+👉 So your early stopping logic is **NOT implemented yet**
+
+---
+
+# ✅ 5. Fix: Proper Early Stopping (YOUR exact case)
+
+## 🔧 Add this in trainer loop
+
+### BEFORE training:
+
+```python
+best_score = -float("inf")
+patience = 2
+no_improve = 0
+min_epochs = 4
+```
+
+---
+
+### AFTER each validation:
+
+```python
+current_score = sum(val_metrics.values()) / len(val_metrics)
+
+if current_score > best_score:
+    best_score = current_score
+    no_improve = 0
+else:
+    no_improve += 1
+
+# 🚀 CORE LOGIC
+if epoch >= min_epochs and no_improve >= patience:
+    print(f"Early stopping at epoch {epoch}")
+    break
+```
+
+---
+
+# 🧠 6. Advanced Fix (RECOMMENDED)
+
+Your system is **multi-task**, so average is weak.
+
+### Better:
+
+```python
+weights = {
+    "bias_score": 1.0,
+    "ideology_score": 0.7,
+    "propaganda_score": 0.8,
+    "narrative_score": 1.0,
+    "narrative_frame_score": 1.5,
+    "emotion_score": 2.0,
+}
+
+current_score = sum(val_metrics[k] * weights[k] for k in val_metrics)
+```
+
+👉 This matches your training weights — much better signal
+
+---
+
+# 🚨 7. CRITICAL Fix (Stability)
+
+You MUST fix instability or model won’t improve further.
+
+## 🔧 Add gradient clipping
+
+In training step:
+
+```python
+torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+```
+
+---
+
+## 🔧 Reduce LR
+
+If current LR is ~2e-5 or higher:
+
+👉 change to:
+
+```yaml
+learning_rate: 1e-5
+```
+
+---
+
+## 🔧 Disable aggressive LR decay
+
+Your system is reducing LR too often.
+
+👉 Modify:
+
+```python
+if unstable:
+    lr *= 0.9
+```
+
+➡ Replace with:
+
+```python
+if unstable and step % 100 == 0:
+    lr *= 0.95
+```
+
+---
+
+# ⚠️ 8. Minor Issues (Not critical)
+
+## Requests warning
+
+Ignore OR fix:
+
+```bash
+pip uninstall chardet -y
+```
+
+---
+
+# 🧠 9. Key Insight (VERY IMPORTANT)
+
+Your model behavior:
+
+* Learns quickly in first 2 epochs
+* Plateaus early
+* Then oscillates due to instability
+
+👉 This is classic:
+
+> "LR too high + no early stopping"
+
+---
+
+# 🚀 Final Action Plan
+
+## MUST DO
+
+1. ✅ Add early stopping (min_epoch=4 logic)
+2. ✅ Add gradient clipping
+3. ✅ Reduce LR
+
+---
+
+## OPTIONAL (but high impact)
+
+4. Weighted validation score
+5. Stabilize LR scheduler
+6. Add EMA / smoothing
+
+---
+
+# 🎯 Expected Result After Fix
+
+* Training stops at **epoch 4–6**
+* Better generalization
+* No wasted compute
+* Stable gradients
+
+---
+
+If you want next level:
+
+👉 I can integrate this **directly into your `trainer.py` (exact patch based on your repo structure)** so you don’t have to guess where to put it.

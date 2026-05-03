@@ -1,0 +1,201 @@
+🚀 TRUTHLENS ANALYSIS LAYER AUDIT PROMPT (v4 – PERFORMANCE + CORRECTNESS CRITICAL)
+You are a principal ML interpretability researcher, numerical systems engineer, and high-performance pipeline auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the src/analysis/ folder.
+This layer is responsible for:
+Feature extraction + explainability + signal generation → feeding aggregation layer
+If this layer is incorrect or slow →
+➡️ Entire system becomes misleading OR unusable at scale
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Every feature must be mathematically valid, token-aligned, vectorized, and non-redundant.
+You must ensure:
+•	No fake / weak features ❌
+•	No token misalignment ❌
+•	No recomputation across analyzers ❌
+•	No Python loops over tokens ❌
+•	No per-sample inefficiency ❌
+•	No unused analyzers ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/analysis/* files
+Also validate integration with:
+•	src/data/ (token inputs)
+•	model outputs (logits / attention / gradients)
+•	src/config/
+•	config/
+________________________________________
+🔥 AUDIT DIMENSIONS (ANALYSIS-SPECIFIC)
+________________________________________
+1. 🔗 ANALYSIS PIPELINE INTEGRITY
+Trace:
+tokenized input
+→ model outputs (logits / attention / gradients)
+→ feature extractors
+→ analyzers
+→ aggregation
+→ final scores
+MUST VERIFY:
+•	Every analyzer is actually used
+•	Inputs match expected shape/type
+•	No analyzer runs on incompatible token space
+CRITICAL:
+•	Missing analyzer in pipeline
+•	Analyzer output ignored downstream
+________________________________________
+2. 🧠 FEATURE VALIDITY (VERY IMPORTANT)
+Audit _text_features.py deeply.
+Detect:
+•	meaningless ratios
+•	noisy heuristics
+•	redundant features
+•	correlated duplicate signals
+MUST:
+•	Justify each feature mathematically
+•	Remove weak or redundant ones
+________________________________________
+3. 🧩 TOKEN ALIGNMENT (HIGHEST PRIORITY)
+Trace:
+tokenizer → offsets → model → analyzer → aggregation
+MUST VERIFY:
+•	Same token indices everywhere
+•	No mixing:
+o	word-level features ❌
+o	subword tokens ❌
+•	Offsets preserved through pipeline
+CRITICAL BUGS:
+•	Feature computed on raw text but applied to tokens
+•	Misaligned SHAP / attention weights
+________________________________________
+4. ⚡ PERFORMANCE (TOP PRIORITY)
+FORBIDDEN:
+•	Python loops over tokens
+•	per-sample analyzer execution
+•	recomputation of same features
+MUST VERIFY:
+•	Batch-level computation
+•	vectorized numpy / torch ops
+•	shared feature reuse via FeatureContext
+________________________________________
+5. 🧱 FEATURE CONTEXT USAGE (CRITICAL)
+Check feature_context.py
+MUST VERIFY:
+•	features computed ONCE
+•	reused across analyzers
+CRITICAL:
+•	recomputing same feature in multiple analyzers
+•	no caching inside context
+________________________________________
+6. 📊 NUMERICAL STABILITY
+Detect:
+•	division by zero
+•	log(0)
+•	NaNs / inf
+•	unstable normalization
+MUST FIX:
+•	epsilon stabilization
+•	safe normalization
+________________________________________
+7. ⚖️ AGGREGATION LOGIC (IF PRESENT)
+MUST VERIFY:
+•	weights normalized
+•	features on same scale
+•	no bias toward high-magnitude features
+CRITICAL:
+•	mixing logits + handcrafted scores without scaling
+________________________________________
+8. 🚀 GPU / TORCH OPTIMIZATION
+MUST CHECK:
+•	tensors already on device
+•	no CPU↔GPU transfers mid-analysis
+•	use torch ops instead of numpy (when possible)
+FLAG:
+•	.cpu().numpy() inside pipeline ❌
+•	unnecessary tensor copies ❌
+________________________________________
+9. 🧹 UNUSED / DEAD ANALYZERS
+You MUST detect:
+Analyzer: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+10. 🧪 MULTI-TASK COMPATIBILITY (CRITICAL FOR YOUR SYSTEM)
+Validate against your schema :
+Tasks:
+•	bias (binary)
+•	ideology (3-class)
+•	propaganda (binary)
+•	frame (multi-label)
+•	narrative (structured + entities)
+•	emotion (20-dim multi-label)
+MUST VERIFY:
+•	analyzers handle:
+o	binary
+o	multi-class
+o	multi-label
+•	no assumption of single label
+________________________________________
+11. 🧪 EDGE CASES
+Check:
+•	empty tokens
+•	all padding tokens
+•	long sequences (truncation)
+•	batch size = 1
+•	missing explanation inputs
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL ANALYSIS BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why it breaks interpretation:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. TOKEN ALIGNMENT ISSUES
+________________________________________
+🧠 4. FEATURE VALIDITY ISSUES
+________________________________________
+⚖️ 5. AGGREGATION ISSUES
+________________________________________
+🚀 6. GPU / TORCH ISSUES
+________________________________________
+🧹 7. UNUSED ANALYZERS
+________________________________________
+⚙️ 8. CONFIG ISSUES
+________________________________________
+🧪 9. MULTI-TASK FAILURES
+________________________________________
+🧪 10. EDGE CASE FAILURES
+________________________________________
+✅ 11. VERIFIED COMPONENTS
+________________________________________
+📉 12. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST detect recomputation
+•	MUST prioritize vectorization
+•	MUST verify token alignment
+•	MUST ensure batch-level execution
+________________________________________
+🎯 SUCCESS CRITERIA (ANALYSIS LAYER)
+A system where:
+•	Features are mathematically meaningful ✅
+•	Token alignment is perfect ✅
+•	Computation is vectorized + batched ✅
+•	No redundant computation ✅
+•	Works across ALL tasks ✅
+•	GPU-friendly execution ✅
+________________________________________
+

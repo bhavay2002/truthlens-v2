@@ -1,0 +1,127 @@
+🧨 FINAL CRASH (Root Cause)
+RuntimeError: unscale_() has already been called on this optimizer since the last update().
+
+📍 Location:
+
+training_step.py → line ~454
+self.scaler.unscale_(self.optimizer)
+🔍 What This Actually Means
+
+You are using AMP (Automatic Mixed Precision) with GradScaler.
+
+👉 And your code is doing this sequence incorrectly:
+
+scaler.unscale_(optimizer)   # ❌ called twice
+scaler.step(optimizer)
+scaler.update()
+⚠️ Why This Happens
+
+From your pipeline:
+
+You have custom training loop
+Likely doing:
+gradient clipping
+multi-task / modular loss engine
+AMP
+
+👉 Somewhere, unscale_() is being called more than once per step
+
+🧠 The Rule (PyTorch AMP Contract)
+
+Per step, the correct flow is:
+
+scaler.scale(loss).backward()
+
+# OPTIONAL (only once)
+scaler.unscale_(optimizer)
+
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+scaler.step(optimizer)
+scaler.update()
+optimizer.zero_grad()
+❌ Your Current Situation
+
+You are likely doing one of these:
+
+Case 1 — Double unscale
+scaler.unscale_(optimizer)
+...
+scaler.unscale_(optimizer)  # 💥 crash
+Case 2 — Hidden duplicate
+One in:
+training_step.py
+Another inside:
+loss engine / trainer / wrapper
+✅ FIX (Precise + Minimal)
+🔧 Step 1 — Search
+
+Run:
+
+grep -r "unscale_" src/
+🔧 Step 2 — Ensure ONLY ONE call per step
+
+Keep it in ONE place only, preferably:
+
+# training_step.py
+if self.use_amp:
+    self.scaler.unscale_(self.optimizer)
+🔧 Step 3 — Guard it (Best Practice)
+
+Add protection:
+
+if self.use_amp and not self._unscaled:
+    self.scaler.unscale_(self.optimizer)
+    self._unscaled = True
+
+Reset after step:
+
+self._unscaled = False
+🚀 Clean AMP Template (Use This)
+
+Replace your training step logic with:
+
+with torch.cuda.amp.autocast(enabled=self.use_amp):
+    outputs = model(**batch)
+    loss = outputs["loss"]
+
+self.scaler.scale(loss).backward()
+
+# ONLY ONCE
+self.scaler.unscale_(self.optimizer)
+
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+self.scaler.step(self.optimizer)
+self.scaler.update()
+
+self.optimizer.zero_grad(set_to_none=True)
+⚠️ Additional Issues You MUST Fix
+
+These are not crashing, but hurting performance/stability.
+
+1. ❌ torch.compile is failing
+Dynamo is not supported on Python 3.12+
+Fix:
+
+Either:
+
+✅ Disable in config
+torch_compile: false
+
+OR
+
+✅ Downgrade Python (recommended for performance)
+conda create -n truthlens python=3.10
+
+👉 Python 3.12 + torch.compile = not supported
+
+2. ⚠️ Model moved AFTER optimizer creation
+optimizer may hold stale parameter refs
+Fix:
+
+In create_trainer_fn:
+
+model.to(device)   # ✅ BEFORE optimizer
+
+optimizer = build_optimizer(model)

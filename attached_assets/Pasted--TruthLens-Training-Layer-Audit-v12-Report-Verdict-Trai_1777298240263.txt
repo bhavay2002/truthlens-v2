@@ -1,0 +1,327 @@
+🛑 TruthLens Training Layer Audit — v12 Report
+Verdict: Training cannot run end-to-end as currently wired. Multiple show-stoppers in the wiring layer (create_trainer_fn.py ↔ loss_engine.py ↔ evaluation_engine.py ↔ dataloader_factory.py) prevent a single trainer.train() call from completing on the documented entrypoint (main.py). On top of that, several silent-correctness bugs (AMP grad-norm timing, scheduler defaults, checkpoint state) break stability and reproducibility even when wiring is patched.
+________________________________________
+🔴 1. CRITICAL TRAINING BUGS
+🟥 BUG-1 — build_dataloader signature mismatch (training cannot start)
+•	File: src/training/create_trainer_fn.py lines 83–95
+•	Function: create_trainer_fn
+•	Issue: Calls
+build_dataloader(df=train_df, task=task, batch_size=params["batch_size"], shuffle=True)
+but src/data_processing/dataloader_factory.py:61 requires:
+build_dataloader(*, task, dataset, df, split, config, tokenizer=None)
+Missing dataset, split, config. Extra batch_size/shuffle kwargs will raise TypeError.
+•	Why it breaks training: First call from main.py → create_trainer_fn → TypeError: build_dataloader() got an unexpected keyword argument 'batch_size'. Training never begins.
+•	Exact fix:
+from src.data_processing.dataset import TruthLensDataset  # or your factory
+from src.data_processing.dataloader_factory import DataLoaderConfig
+loader_cfg = DataLoaderConfig(batch_size=params["batch_size"])
+train_ds = TruthLensDataset.from_df(train_df, task=task, tokenizer=params["tokenizer"])
+val_ds   = TruthLensDataset.from_df(val_df,   task=task, tokenizer=params["tokenizer"])
+train_loader = build_dataloader(
+    task=task, dataset=train_ds, df=train_df, split="train",
+    config=loader_cfg, tokenizer=params["tokenizer"],
+)
+val_loader = build_dataloader(
+    task=task, dataset=val_ds, df=val_df, split="val",
+    config=loader_cfg, tokenizer=params["tokenizer"],
+)
+Add tokenizer to _validate_params required keys.
+🟥 BUG-2 — Loss engine task-type string mismatch (every task fails to construct)
+•	File: src/models/loss/multitask_loss.py lines 84–99 (consumed by src/training/loss_engine.py)
+•	Function: MultiTaskLoss.__init__
+•	Issue: Checks cfg.task_type == "multi_class" and cfg.task_type in {"binary", "multi_label"} (underscored), but src/config/task_config.py:130 returns "multiclass" / "multilabel" / "binary" (no underscore). Every non-binary task hits the else branch:
+raise ValueError(f"{name}: invalid task_type={cfg.task_type}")
+•	Why it breaks training: LossEngine(...) fails inside create_trainer_fn for tasks bias, ideology, propaganda, narrative, narrative_frame, emotion. Show-stopper.
+•	Exact fix: Normalize at one boundary. In multitask_loss.py:
+ttype = cfg.task_type.replace("_", "").lower()  # "multi_class"→"multiclass"
+if ttype == "multiclass":
+    loss_functions[name] = nn.CrossEntropyLoss(ignore_index=cfg.ignore_index)
+elif ttype in {"binary", "multilabel"}:
+    loss_functions[name] = nn.BCEWithLogitsLoss(reduction="none", pos_weight=cfg.pos_weight)
+elif ttype == "regression":
+    loss_functions[name] = nn.MSELoss()
+else:
+    raise ValueError(f"{name}: invalid task_type={cfg.task_type}")
+Apply the same normalization in TaskLossRouter and EvaluationEngine._init_metrics for symmetry.
+🟥 BUG-3 — EvaluationEngine() constructed with no config
+•	File: src/training/create_trainer_fn.py:174
+•	Function: create_trainer_fn → evaluator = EvaluationEngine()
+•	Issue: EvaluationEngine.__init__(self, config: EvaluationConfig) (line 96 of evaluation_engine.py) requires the config positional arg.
+•	Why it breaks training: TypeError: __init__() missing 1 required positional argument: 'config' after BUG-1/BUG-2 are fixed.
+•	Exact fix:
+evaluator = EvaluationEngine(EvaluationConfig(
+    task_types={task: get_task_type(task)},
+    device=device,
+))
+🟥 BUG-4 — Optimizer/scheduler/scaler state never persisted in checkpoints (HARDEN-1 regression)
+•	File: src/training/trainer.py lines 197–205, 254–261
+•	Function: Trainer._train_epoch, Trainer._save_checkpoint
+•	Issue: Calls
+self.checkpoint.save(step=self.global_step, model=self._unwrap_model())
+with no optimizer=, scheduler=, scaler=. CheckpointEngine.save() writes None for those fields. On resume → AMP loss-scale, optimizer momentum (Adam β₁/β₂ moving averages), and LR-schedule progress are all lost. This silently regresses the HARDEN-1 fix described in replit.md.
+•	Why it breaks training: After resume, optimizer restarts from zero momentum → effective LR jumps; GradScaler re-detects the safe scale (~10–100 steps of "calm → spike → calm" pattern); LambdaLR step counter restarts → wrong LR.
+•	Exact fix: Pass them through. The optimizer/scheduler/scaler live on TrainingStep so the Trainer needs accessors:
+# in Trainer._save_checkpoint and the in-epoch save:
+self.checkpoint.save(
+    step=self.global_step,
+    epoch=self._epoch,                # add an epoch counter
+    model=self._unwrap_model(),
+    optimizer=self.training_step.optimizer,
+    scheduler=self.training_step.scheduler,
+    scaler=self.training_step.scaler,
+    metrics=metrics,
+    tag="epoch",
+)
+🟥 BUG-5 — compute_grad_norm runs BEFORE unscale_ under fp16 AMP
+•	File: src/training/training_step.py lines 199 vs 211–212
+•	Function: TrainingStep.run
+•	Issue:
+grad_norm = compute_grad_norm(self.model)        # line 199 — gradients still scaled
+...
+if self.use_amp:
+    self.scaler.unscale_(self.optimizer)         # line 212 — too late
+Under fp16 AMP, gradients carry the GradScaler loss-scale (typically 2¹⁵–2¹⁶). So the logged grad_norm is ~32 000–65 000× the real value.
+•	Why it breaks training: instrumentation.AnomalyClassifier flags grad_norm > 1000 as "exploding_gradients" → fires reduce_lr action every step → TrainingStep halves LR on every step → LR collapses to min_lr within ~30 steps. Spike detector also misfires. Effectively no learning.
+•	Exact fix: Move the unscale BEFORE the grad-norm read, and gate the whole block on should_step so accumulation steps don't unscale prematurely:
+if should_step:
+    if self.use_amp:
+        self.scaler.unscale_(self.optimizer)
+    grad_norm = compute_grad_norm(self.model)
+    if self.config.max_grad_norm:
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
+    ...
+else:
+    grad_norm = None  # do not log a misleading scaled value
+🟥 BUG-6 — _reduce_lr action silently overwritten by scheduler
+•	File: src/training/training_step.py:359-362, interaction with src/models/optimization/lr_scheduler.py (LambdaLR)
+•	Function: TrainingStep._reduce_lr
+•	Issue:
+def _reduce_lr(self):
+    for g in self.optimizer.param_groups:
+        g["lr"] *= 0.5
+But the scheduler is a LambdaLR, which on the next scheduler.step() resets g["lr"] = base_lr * lambda(step) — wiping the manual reduction. The intervention is a no-op after one step.
+•	Why it breaks training: Spike/anomaly LR control (MonitorAction.REDUCE_LR, TrainAction.REDUCE_LR) appears to fire and log, but has zero effect on the next step's LR. Recovery from a spike never happens.
+•	Exact fix: Reduce the LambdaLR's base_lrs (these are what LambdaLR multiplies into) instead of the live lr:
+def _reduce_lr(self, factor: float = 0.5):
+    for g, base in zip(self.optimizer.param_groups, self.scheduler.base_lrs):
+        g["lr"] *= factor
+    self.scheduler.base_lrs = [b * factor for b in self.scheduler.base_lrs]
+Better: route through the (currently dead) LRSchedulerEngine.adapt(...) — see DEAD-1.
+🟥 BUG-7 — build_scheduler defaults num_training_steps=1000; LR decays to 0 mid-training
+•	File: src/models/optimization/lr_scheduler.py:202-216, called from src/training/create_trainer_fn.py:107-110
+•	Function: build_scheduler ↔ _linear_schedule
+•	Issue: params from main.py does not contain num_training_steps, so it falls to the default 1000. _linear_schedule returns 0.0 once current_step ≥ num_training_steps. With a typical TruthLens training run (~5k steps/epoch × 4 epochs = 20k steps), LR is 0 for the last 19 000 steps.
+•	Why it breaks training: Loss flat-lines after step 1000 — looks exactly like "model converged" but is actually "no learning rate".
+•	Exact fix: Compute it where the loaders are known:
+num_training_steps = len(train_loader) * params.get("epochs", config.training.num_epochs)
+scheduler = build_scheduler(optimizer=optimizer, config={
+    **params,
+    "num_training_steps": num_training_steps,
+    "num_warmup_steps": int(0.1 * num_training_steps),
+})
+Pass that down explicitly; never rely on the silent default.
+🟥 BUG-8 — Hyperparameter tuning direction inverted for accuracy/F1 metrics
+•	File: src/training/hyperparameter_tuning.py:198-204 and cross_validation.py:24-54
+•	Function: create_study (single-objective branch) + resolve_metric
+•	Issue: Single-objective study is hardcoded direction="minimize". But resolve_metric returns accuracy/micro_f1 first — both maximization metrics. Optuna will pick the worst-performing trial.
+•	Why it breaks training: Tuning silently degrades model quality.
+•	Exact fix:
+def create_study(*, multi_objective, storage, task: str):
+    task_type = get_task_type(task)
+    direction = "maximize" if task_type in {"multiclass", "multilabel", "binary"} else "minimize"
+    ...
+And in multi-objective: directions=["maximize", "minimize"] (score↑, std↓).
+🟥 BUG-9 — Optuna-suggested epochs is ignored
+•	File: src/training/trainer.py:80 vs src/training/hyperparameter_tuning.py:120
+•	Issue: Trainer.__init__ reads self.epochs = self.cfg.training.num_epochs from the YAML config, ignoring params["epochs"] from Optuna.
+•	Why it breaks training: Tuning explores epoch counts but every trial uses the same YAML value → wasted trial budget.
+•	Exact fix: In Trainer.__init__:
+self.epochs = int(params_override.get("epochs", self.cfg.training.num_epochs))
+Plumb params through create_trainer_fn → Trainer, or set cfg.training.num_epochs from params before constructing.
+🟥 BUG-10 — LossEngine double-fires balancer and drops shared_parameters
+•	File: src/training/loss_engine.py:113, 130-137 and src/models/loss/multitask_loss.py:236-241
+•	Function: LossEngine.compute
+•	Issue:
+i.	LossEngine.compute calls self.loss_module(logits, labels) without shared_parameters=. So MultiTaskLoss.forward receives shared_parameters=None and the balancer's on_before_backward gets None → GradNorm balancer cannot compute task gradients.
+ii.	After self.loss_module(...) returns, LossEngine also calls self._balancer.on_before_backward(...) — duplicating the call (MultiTaskLoss.forward already called it). With stateful balancers (e.g. uncertainty/GradNorm) this corrupts internal counters.
+•	Why it breaks training: Multi-task balancing silently uses stale/no gradients; balancer state advances 2× per step.
+•	Exact fix: Push the call through the loss module and remove the duplicate:
+total_loss, task_losses = self.loss_module(
+    logits, labels, shared_parameters=shared_parameters,
+)
+# delete the redundant LossEngine.on_before_backward block
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+🟧 PERF-1 — Validation tensors detached to CPU per-batch
+•	Location: src/training/evaluation_engine.py:193-196
+•	Issue: preds.detach().cpu() + labels.detach().cpu() per batch forces device-host sync each batch (full GPU stall). Then streaming metrics use Python-level .sum().item() (another sync per call).
+•	Fix: Keep accumulation tensors on GPU; sync only in compute():
+class StreamingAccuracy:
+    def __init__(self, device): self.correct = torch.zeros((), device=device); self.total = 0
+    def update(self, preds, labels):
+        self.correct += (preds == labels).sum()
+        self.total += labels.numel()
+    def compute(self): return (self.correct.item()) / max(self.total, 1)
+•	Expected speedup: 3–6× on the validation loop for typical batch counts.
+🟧 PERF-2 — Validation runs on every DDP rank without sharding
+•	Location: src/training/create_trainer_fn.py:90-95 (no DistributedSampler for val) + Trainer.evaluate
+•	Issue: Each rank evaluates the full val set, then _sync_scalar averages identical values. With N GPUs, validation costs N× wall-time vs. proper sharding.
+•	Fix: When distributed.initialized, attach DistributedSampler(val_dataset, shuffle=False, drop_last=False) and rely on _sync_scalar to merge per-shard partial sums. For reductions to be correct, switch metrics to (sum, count) reductions, not pre-divided averages.
+•	Expected speedup: ~N× for validation on N GPUs.
+🟧 PERF-3 — optimize_model calls torch.compile unconditionally on CPU
+•	Location: src/training/training_setup.py:208-213
+•	Issue: torch.compile adds Dynamo tracing overhead on CPU and silently swallows compile failures via except Exception. On CPU dev/debug runs (the current Replit environment), this slows training and hides real errors.
+•	Fix:
+if torch.cuda.is_available():
+    try:
+        model = torch.compile(model, mode="reduce-overhead")
+        logger.info("Model compiled with torch.compile")
+    except Exception as e:
+        logger.warning("torch.compile failed: %s", e)  # don't swallow blindly
+•	Expected speedup: Removes a 1.2–2× CPU slowdown on small dev runs; surfaces real compile errors.
+🟧 PERF-4 — Wasteful per-micro-batch compute_grad_norm
+•	Location: src/training/training_step.py:199
+•	Issue: Computes the full grad-norm on every micro-batch even when should_step=False. Each call iterates all parameters and squares norms.
+•	Fix: Move into the if should_step: block (also fixes BUG-5).
+•	Expected speedup: ~5–10% step latency at gradient_accumulation_steps≥4.
+🟧 PERF-5 — _tensor_to_feature_dict flattens float tensors per step
+•	Location: src/training/training_step.py:91-104, 128-143
+•	Issue: Every 50th step, this iterates all float tensors in the batch, calls .flatten() and float(flat[i]) for up to 50 elements per key — multiple host-device syncs.
+•	Fix: Either drop entirely (you already log loss/grad/health) or batch-extract on-device with .detach().cpu().tolist() once per tensor:
+for k, v in batch.items():
+    if isinstance(v, torch.Tensor) and v.dtype.is_floating_point:
+        flat = v.detach().flatten()[:max_items].cpu().tolist()
+        feature_dict.update({f"{k}_{i}": x for i, x in enumerate(flat)})
+•	Expected speedup: Eliminates ~50 host-device syncs per logging step.
+________________________________________
+🟡 3. LOSS / OPTIMIZATION ISSUES
+🟨 LOSS-1 — Two duplicate SpikeDetector implementations with different policies
+•	src/training/instrumentation.py:187-201 (hybrid ratio | z-score)
+•	src/training/monitor_engine.py:51-58 (pure ratio)
+•	Both fire LR-reduce actions → conflicting interventions per step. Pick one (the instrumentation version is stricter and bias-corrected).
+🟨 LOSS-2 — task_scheduler.update_losses only sees one task per step under filtered batching
+•	File: src/training/training_step.py:179-182 after _filter_batch (lines 122 + 345-357)
+•	The adaptive task scheduler only ever observes the loss of the task it just scheduled → its EMA for unselected tasks stays at the init 1.0 forever → "adaptive" reduces to "round-robin with extra steps".
+•	Fix: Run the model on the full batch (no _filter_batch) and let MultiTaskLoss mask via labels — the model is already multi-task, so per-task filtering at the batch level wastes the joint-encoder forward pass and breaks the scheduler signal.
+🟨 LOSS-3 — loss = total_loss / grad_accum_steps divides AGAIN after MultiTaskLoss already normalized
+•	MultiTaskLoss.forward divides by active_heads (line 254). Then TrainingStep.run divides by gradient_accumulation_steps. Both are correct in isolation, but the per-task gradient magnitude is now 1 / (active_heads × grad_accum), which interacts poorly with the static task_weight (line 209). For grad accum > 1, effective task weights shrink — schedule LR accordingly or scale task_weight by grad_accum.
+🟨 LOSS-4 — multilabel_loss ignore mask uses sentinel value -100.0 against float targets
+•	src/training/loss_functions.py:55 — multilabel labels are typically {0.0, 1.0}, not -100. The mask targets != -100.0 is always all-True → ignore semantics never trigger. If callers do encode -100, it's compared to a float in safe_targets = torch.where(mask, targets, 0) then ALSO passed through BCE — works, but the contract is undocumented and inconsistent with multiclass_loss's integer ignore.
+🟨 LOSS-5 — compute() raises on non-finite per-task loss but MultiTaskLoss.forward already raised
+•	src/training/loss_engine.py:122-124 is a redundant double check; not a bug, but the duplicate raise paths confuse stack traces.
+________________________________________
+🧠 4. MULTI-TASK TRAINING ISSUES
+🧠 MT-1 — LossEngineConfig.task_types is built per-task in create_trainer_fn
+•	Each Trainer is single-task (task_types={task: task_type}). The "multi-task" loss engine is configured for one task per Trainer instance — so the entire MultiTaskLoss orchestrator (normalizer, coverage, balancer) collapses to single-task. The system's documented "multi-task balanced training" never actually runs.
+•	Fix: Either build a single MultiTaskTrainer that shares a backbone across all 6 tasks (that's the original design), or accept that Trainer is per-task and rip out the multitask balancer plumbing here to avoid the false-positive "balanced" claim.
+🧠 MT-2 — EvaluationEngine doesn't support binary task type
+•	src/training/evaluation_engine.py:138-145 only branches on multiclass | multilabel | regression. Binary is silently dropped (no metric created). Tasks like propaganda (binary in the registry) report no eval score → early stopping never triggers → trains to full epoch budget.
+🧠 MT-3 — task_scheduler.next_task() advances state in sanity check
+•	src/training/trainer.py:218 → run_sanity_check → training_step.run → task_scheduler.next_task(). After sanity check, the round-robin index is offset by 1 vs. a fresh run. Reproducibility hazard.
+•	Fix: Pass a dry_run=True flag through TrainingStep.run that bypasses scheduler/optimizer/scaler mutations during sanity.
+🧠 MT-4 — MultiTaskLoss returns task_losses containing weighted, normalized, coverage-multiplied losses, not raw
+•	multitask_loss.py:211 task_losses[task] = weighted_loss. The task_scheduler (line 179-182 of training_step.py) consumes these as if they were raw loss magnitudes for adaptive scheduling — they're not. Pass raw_losses instead, OR change the contract.
+________________________________________
+🚀 5. GPU / DEVICE ISSUES
+🚀 GPU-1 — Model is moved to device 3× and re-wrapped under DDP
+•	Trainer.__init__: self.model.to(device) (line 75)
+•	TrainingStep.__init__: self.model.to(self.device) (line 78) — independently chooses cuda
+•	DistributedEngine.wrap_model: model.to(device) again (line 96)
+•	The optimizer was built in create_trainer_fn against the original CPU parameters, then the model gets re-moved. PyTorch parameters preserve identity through .to() only when device is the same; cross-device .to() returns a new tensor → the optimizer holds stale refs → "expected all tensors to be on the same device" at first optimizer.step().
+•	Fix: Pick one canonical device-move site (in Trainer before build_optimizer), then never move again. Build optimizer after the model is on its final device.
+🚀 GPU-2 — non_blocking=True only works with pinned memory
+•	training_step.py:333 does v.to(device, non_blocking=True) on every batch. non_blocking is silently ignored unless pin_memory=True AND tensor is pinned. dataloader_factory.py:115 correctly gates pin_memory on CUDA, so this is OK on GPU; on CPU it's a no-op anyway. Check training_utils.move_batch_to_device (line 76) — it correctly gates on is_pinned() — so use that instead of the inline lambda.
+🚀 GPU-3 — distributed_engine.initialize() calls torch.cuda.set_device unconditionally
+•	distributed_engine.py:78 — when CUDA isn't available (or NCCL isn't) this raises before training starts. Backend should fall back:
+if not torch.cuda.is_available():
+    self.config.backend = "gloo"
+...
+if torch.cuda.is_available():
+    torch.cuda.set_device(self.local_rank)
+🚀 GPU-4 — EvaluationEngine.evaluate does model.to(self.device) per call
+•	evaluation_engine.py:113 — moves the model on every eval call. If model is already on device, this is a no-op cost; if it's on a different device (compiled/DDP), it can break. Check before move.
+________________________________________
+🔄 6. RECOMPUTATION ISSUES
+🔁 REC-1 — Loss validity checked 3× per step
+•	MultiTaskLoss.forward checks torch.isfinite(raw_loss) (line 174) — sync.
+•	LossEngine.compute re-checks total_loss and each task loss (lines 119–124) — N+1 syncs.
+•	TrainingStep.run re-checks total_loss (line 166) — sync.
+•	All three force device-host syncs. Keep one (cheapest: at TrainingStep boundary using torch.isnan(...).any() on a single bool reduce, no .item()).
+🔁 REC-2 — MultiTaskLoss runs coverage.update AND coverage.weight AND normalizer.normalize per task per step on the GPU then immediately gets re-summed in LossEngine.compute to produce a mean_loss stat that nothing reads
+•	loss_engine.py:149-154 builds loss_stats["mean_loss"] (a host-side float, .item() sync) every step but only attaches it to outputs — the Trainer doesn't log it. Drop this until something consumes it.
+🔁 REC-3 — compute_grad_norm (training_step.py:199) duplicates work that instrumentation.GradTracker.update(model) does inside instrumentation.step(...)
+•	Two full passes over model.parameters() per step computing the same total norm. Cache the norm from GradTracker and reuse.
+________________________________________
+🧹 7. UNUSED TRAINING COMPONENTS
+Component	File	Status	Recommendation
+LRSchedulerEngine	src/training/lr_scheduler_engine.py (entire file, 237 lines)	UNUSED — nothing imports it; trainer uses src.models.optimization.lr_scheduler.build_scheduler instead	Either delete, or wire into TrainingStep so adapt(monitoring_metrics) is called when MonitorAction.SPIKE / low health fires (would fix BUG-6 properly).
+MultiOptimizer	src/models/optimization/optimizer_factory.py:150-178	UNUSED — no callsite	Delete or document the use case.
+SchedulerWrapper	src/models/optimization/lr_scheduler.py:175-199	UNUSED — Trainer steps the scheduler directly	Delete.
+set_global_seed	src/training/training_utils.py:234-243	UNUSED — src/utils/seed_utils.set_seed is used everywhere	Delete the duplicate (drift risk).
+TrainingMetrics (defined twice)	src/training/training_utils.py:205-226 AND 340-379	The second definition shadows the first — Python silently uses the second. The first one's API is inconsistent with the second.	Delete lines 205–226.
+safe_cuda_execution	src/training/training_utils.py:299-307	UNUSED	Either wrap the training step with it or delete.
+inference_mode() ctx	src/training/training_utils.py:195-198	UNUSED — EvaluationEngine uses @torch.inference_mode() decorator instead	Delete.
+loss_functions.LossFactory	src/training/loss_functions.py:98-115	UNUSED inside src/training/ (consumed by classifier modules per the comment) — confirm by rg "LossFactory"	If not used externally, move closer to its consumer or delete.
+TaskBalancer, handle_silent_collapse, handle_task_dominance, resolve_conflicts (per replit.md HARDEN-12)	These were "intentionally not auto-wired" per the doc, but are not referenced anywhere — rg confirms zero callers in src/training/	Either expose via a Trainer.attach_balancer(...) API or delete. Currently they're documentation only.	
+________________________________________
+⚙️ 8. CONFIG ISSUES
+⚙️ CFG-1 — Trainer reads cfg.training.num_epochs but tuning passes params["epochs"]
+See BUG-9.
+⚙️ CFG-2 — Hardcoded 0.5 LR-reduce factor
+training_step.py:361 and lr_scheduler_engine.py:36 both hardcode 0.5. Should be LRSchedulerConfig.spike_lr_scale.
+⚙️ CFG-3 — Hardcoded log-every / checkpoint-every steps
+trainer.py:181 (50), trainer.py:199 (500) are hardcoded. Move to TrainingSetupConfig or TrainerConfig:
+log_every_steps: int = 50
+checkpoint_every_steps: int = 500
+⚙️ CFG-4 — TrainingSetupConfig is frozen=True but Trainer reads setup_cfg.run_sanity_check only
+The frozen config prevents runtime overrides (e.g. disabling sanity check for fast Optuna trials). Either unfreeze or expose explicit override path.
+⚙️ CFG-5 — LossEngineConfig.normalization default "active" does not match MultiTaskLoss.VALID_NORMALIZATION semantic
+active divides by active heads — correct for sparse-supervision multi-task but wrong when single-task per Trainer (always 1 active head → division by 1, no-op). fixed would also be no-op. Document or guard.
+⚙️ CFG-6 — TaskSchedulerConfig.strategy default "round_robin" requires tasks list of length > 1
+With create_trainer_fn building one task at a time, the scheduler always picks the same task → wasted overhead per step.
+________________________________________
+🧪 9. EDGE CASE FAILURES
+Edge case	Behavior	Severity
+batch_size=1	_infer_batch_size returns 1 → throughput correct. AMP autocast OK. Sampler may collapse class balance.	Low.
+Empty batch	MultiTaskLoss.forward with active_heads=0 returns t.sum() * 0.0 if any logit requires grad — backward call works (zero grad). But LossEngine then tries task_losses mean over empty dict at loss_engine.py:151 → torch.stack([]) raises RuntimeError.	High — crash path. Guard with if task_losses:.
+Long sequences	No truncation here; relies on dataset's max_length. OK.	None.
+Class imbalance (binary)	binary_loss doesn't apply pos_weight. TaskLossConfig.pos_weight is plumbed but loss_functions.binary_loss doesn't accept it. BCEWithLogitsLoss in MultiTaskLoss does. Two divergent code paths.	Medium — silent dependence on which path runs.
+NaN labels	multiclass_loss masks via targets != ignore_index (-100), but does not handle NaN. loss_engine.LossEngine.compute will see a NaN total_loss and raise RuntimeError. The "skip NaN" path in TrainingStep (line 168-171) catches this AFTER the raise — actually a try/except is missing → exception propagates. skip_nan_loss=True is not honored when LossEngine.compute raises.	High — set skip_nan_loss semantics need a try around loss_engine.compute.
+Single-batch dataset	next(iter(self.train_loader)) consumes the only batch → first epoch sees nothing.	High in tiny-dataset/CV folds. Reset iterator after sanity check or use a separate loader.
+DataLoader returns list/tuple (not dict)	TrainingStep._move_batch assumes dict; model(**batch) requires dict. Will crash with TypeError.	Medium — document contract or add guard.
+________________________________________
+✅ 10. VERIFIED COMPONENTS
+•	✅ optimizer.zero_grad(set_to_none=True) is correct (training_step.py:236).
+•	✅ optimizer.step() and scheduler.step() order is correct (optimizer before scheduler) for non-AMP path.
+•	✅ AMP scaler.step(optimizer) followed by scaler.update() is correct PyTorch pattern (training_step.py:222-223).
+•	✅ EvaluationEngine.evaluate is wrapped in @torch.inference_mode() — no gradient leak from val into train.
+•	✅ cross_validation.py does gc.collect() + torch.cuda.empty_cache() per fold — good memory hygiene.
+•	✅ cross_validation.build_splits uses StratifiedKFold with seeded RNG — leakage-free.
+•	✅ DistributedSampler.set_epoch is called before each epoch (trainer.py:118-120) — required for DDP shuffle correctness.
+•	✅ data_pipeline.py (per replit.md DATA-AUDIT) runs leakage check on raw splits before augmentation — no train→val/test bleed.
+•	✅ param_groups weight-decay split correctly excludes LayerNorm.weight/bias (optimizer_factory.py:26-62) — standard transformer best practice.
+•	✅ set_seed is called in create_trainer_fn before model build — reproducibility entry point exists.
+________________________________________
+📉 11. FINAL SCORE
+Score: 3.0 / 10
+Why not 10
+•	Show-stoppers: BUG-1, BUG-2, BUG-3 prevent trainer.train() from running at all (worth ~−3.5 points combined).
+•	Silent correctness: BUG-4 (checkpoint regression), BUG-5 (AMP grad norm), BUG-6 (LR reduce no-op), BUG-7 (LR decays to 0), BUG-8 (Optuna direction inverted), BUG-10 (balancer double-fire) → trained models will under-perform vs. the design intent (~−2.5 points).
+•	Architectural confusion: Two SpikeDetector implementations, two TrainingMetrics classes, dead LRSchedulerEngine (237 lines), trainer that calls itself "multi-task" but builds one task at a time → "balanced multi-task training" is documentation only (~−1 point).
+•	Performance: PERF-1, PERF-2 cost 3–6× wall-time on validation across DDP (~−0.5 point).
+•	Edge cases: Empty batch + NaN-skip path are crash-paths despite explicit skip_nan_loss=True config (~−0.5 point).
+Steps to reach ≥9.5
+1.	Fix the three show-stoppers (BUG-1, BUG-2, BUG-3) — trainer.train() must complete one epoch end-to-end on the documented entrypoint.
+2.	Restore HARDEN-1 by passing optimizer/scheduler/scaler into checkpoint.save(...) (BUG-4). Add a resume integration test that asserts AMP loss-scale, optimizer momentum, and LR-step are all preserved.
+3.	Reorder the AMP block so unscale_ → grad-norm → clip → step → update is the strict sequence on micro-batches that step (BUG-5).
+4.	Wire LRSchedulerEngine.adapt(...) into TrainingStep so spike/health actions modify the LambdaLR base_lrs instead of being silently overwritten (BUG-6 + DEAD-1).
+5.	Compute num_training_steps at loader-build time and pass to build_scheduler (BUG-7).
+6.	Per-task tuning direction — query get_task_type(task) and set direction="maximize" for classification (BUG-8).
+7.	Single-source seed/metrics — delete set_global_seed, the duplicate TrainingMetrics, and the unused LRSchedulerEngine if you don't wire it.
+8.	Multi-task or per-task — pick one. Either build a real MultiTaskTrainer (one shared backbone, all 6 task heads in one optimizer) and remove the per-task Trainer, or strip the multi-task balancing plumbing from the per-task path.
+9.	Edge-case guards: empty task_losses dict, NaN labels caught at LossEngine boundary, dict-only batch contract enforced.
+10.	Determinism: add torch.use_deterministic_algorithms(True) (gated by config) and torch.backends.cudnn.deterministic=True for CV / paper-comparable runs.
+After these fixes, Trainer should run end-to-end on a CPU dev machine and on a GPU production node with reproducible behavior, balanced multi-task gradients, and intervention actions that actually take effect.
+________________________________________
+That is the full audit. I have made no code changes — every fix above is a recommendation for you (or a follow-up build task) to apply. If you'd like, I can switch to Build mode and apply the show-stopper fixes (BUG-1 through BUG-5 and BUG-10) in one focused pass.
+

@@ -1,0 +1,186 @@
+ TRUTHLENS TRAINING LAYER AUDIT PROMPT (v12 – OPTIMIZATION + STABILITY CRITICAL)
+You are a principal ML training systems engineer, optimization specialist, and large-scale training auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the src/training/ folder.
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Training must be numerically stable, GPU-efficient, leakage-free, and correctly optimize all tasks.
+You must ensure:
+•	No data leakage ❌
+•	No incorrect gradient flow ❌
+•	No inefficient training loops ❌
+•	No unstable optimization ❌
+•	No redundant computation ❌
+•	No unused training components ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/training/* ALL FILES 
+Also validate integration with:
+•	src/data/ (dataloaders)
+•	src/models/
+•	src/evaluation/
+•	src/config/
+________________________________________
+🔥 AUDIT DIMENSIONS (TRAINING-SPECIFIC)
+________________________________________
+1. 🔗 TRAINING PIPELINE INTEGRITY
+Trace:
+data → dataloader → model → forward → loss → backward → optimizer → scheduler → logging
+MUST VERIFY:
+•	correct order of operations
+•	no skipped steps
+•	gradients flow correctly
+CRITICAL:
+•	missing optimizer.step() or zero_grad() ❌
+•	backward called incorrectly ❌
+________________________________________
+2. ⚡ GPU UTILIZATION (TOP PRIORITY)
+MUST VERIFY:
+•	model + data on GPU
+•	pin_memory=True, non_blocking=True
+•	no CPU bottlenecks
+REQUIRED:
+•	mixed precision (torch.cuda.amp)
+•	gradient scaling
+CRITICAL:
+•	CPU training when GPU available ❌
+•	device mismatch ❌
+________________________________________
+3. 🧠 LOSS COMPUTATION (MULTI-TASK CRITICAL)
+MUST VERIFY:
+•	correct loss per task
+•	proper aggregation of multi-task losses
+CHECK:
+•	weighted loss combination
+•	dynamic vs static weights
+CRITICAL:
+•	imbalance across tasks ❌
+•	incorrect loss scaling ❌
+________________________________________
+4. 🧮 NUMERICAL STABILITY
+Detect:
+•	exploding gradients
+•	vanishing gradients
+•	NaNs in loss
+MUST FIX:
+•	gradient clipping
+•	stable loss computation
+________________________________________
+5. 🚀 TRAINING LOOP PERFORMANCE
+FORBIDDEN:
+•	per-sample operations ❌
+•	redundant forward passes ❌
+MUST VERIFY:
+•	batch-level processing
+•	minimal Python overhead
+________________________________________
+6. 🔄 RECOMPUTATION ELIMINATION
+MUST VERIFY:
+•	no duplicate forward passes
+•	no repeated loss computation
+CRITICAL:
+•	recomputing features inside training loop ❌
+________________________________________
+7. 📉 SCHEDULER + OPTIMIZER CORRECTNESS
+MUST VERIFY:
+•	correct scheduler step timing:
+o	per-step vs per-epoch
+•	optimizer configured correctly
+CRITICAL:
+•	scheduler stepping at wrong time ❌
+•	incorrect learning rate decay ❌
+________________________________________
+8. 🧪 VALIDATION LOOP (LEAKAGE CRITICAL)
+MUST VERIFY:
+•	validation separate from training
+•	no gradient updates in validation
+CRITICAL:
+•	training on validation data ❌
+•	leaking labels ❌
+________________________________________
+9. 💾 CHECKPOINTING + RECOVERY
+MUST VERIFY:
+•	model + optimizer + scheduler saved
+•	resume training works correctly
+CRITICAL:
+•	incomplete checkpoints ❌
+________________________________________
+10. 🧹 UNUSED / DEAD TRAINING CODE
+Detect:
+Component: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+11. 🧪 EDGE CASES
+Check:
+•	batch size = 1
+•	empty batch
+•	long sequences
+•	class imbalance
+________________________________________
+12. ⚙️ CONFIG INTEGRATION
+MUST VERIFY:
+•	no hardcoded:
+o	learning rate
+o	batch size
+o	epochs
+•	config controls training behavior
+________________________________________
+13. 🔁 REPRODUCIBILITY
+MUST VERIFY:
+•	seeds set correctly
+•	deterministic behavior where possible
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL TRAINING BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why it breaks training:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. LOSS / OPTIMIZATION ISSUES
+________________________________________
+🧠 4. MULTI-TASK TRAINING ISSUES
+________________________________________
+🚀 5. GPU / DEVICE ISSUES
+________________________________________
+🔄 6. RECOMPUTATION ISSUES
+________________________________________
+🧹 7. UNUSED TRAINING COMPONENTS
+________________________________________
+⚙️ 8. CONFIG ISSUES
+________________________________________
+🧪 9. EDGE CASE FAILURES
+________________________________________
+✅ 10. VERIFIED COMPONENTS
+________________________________________
+📉 11. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST ensure no leakage
+•	MUST optimize GPU usage
+•	MUST eliminate recomputation
+•	MUST verify multi-task optimization
+________________________________________
+🎯 SUCCESS CRITERIA (TRAINING LAYER)
+A system where:
+•	Training is stable + efficient ✅
+•	Multi-task optimization is balanced ✅
+•	GPU fully utilized ✅
+•	No leakage ✅
+•	No redundant computation ✅
+•	Fully reproducible ✅
+

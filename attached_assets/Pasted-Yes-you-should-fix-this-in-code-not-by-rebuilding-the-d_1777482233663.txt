@@ -1,0 +1,175 @@
+Yes—you **should fix this in code**, not by rebuilding the dataset. That’s exactly how it’s handled in production pipelines.
+
+Right now:
+
+```text
+emotion__emotion_0 → classes=1
+```
+
+👉 This means:
+
+* Column has only 0s or only 1s
+* No decision boundary exists
+* Model head is useless and harms gradients
+
+---
+
+# 🚀 Industry-Grade Fix (Do This)
+
+You need to **detect and drop invalid labels dynamically** during pipeline/dataset build.
+
+---
+
+# 🔧 ✅ FIX 1 — Drop Single-Class Emotion Columns
+
+### Add this utility
+
+### `src/utils/label_cleaning.py`
+
+```python
+import numpy as np
+
+def remove_single_class_columns(labels, min_pos=1, min_neg=1):
+    """
+    labels: numpy array (N, C)
+    returns: filtered_labels, kept_indices
+    """
+    labels = np.array(labels)
+
+    pos = labels.sum(axis=0)
+    neg = labels.shape[0] - pos
+
+    valid_mask = (pos >= min_pos) & (neg >= min_neg)
+
+    filtered = labels[:, valid_mask]
+
+    return filtered, valid_mask
+```
+
+---
+
+# 🔧 ✅ FIX 2 — Apply in Dataset Factory (CRITICAL)
+
+### Modify:
+
+`src/data_processing/dataset_factory.py`
+
+Inside emotion/multilabel handling:
+
+```python
+from src.utils.label_cleaning import remove_single_class_columns
+
+labels = dataset["labels"]
+
+labels, valid_mask = remove_single_class_columns(labels)
+
+dataset["labels"] = labels
+dataset["valid_label_mask"] = valid_mask
+```
+
+---
+
+# 🔧 ✅ FIX 3 — Adjust Model Output (IMPORTANT)
+
+Your model currently:
+
+```text
+num_labels = 20
+```
+
+After filtering, it may become:
+
+```text
+num_labels = 12 (example)
+```
+
+👉 So update model init dynamically:
+
+```python
+num_labels = dataset["labels"].shape[1]
+
+model = MultiLabelHead(input_dim=768, num_labels=num_labels)
+```
+
+---
+
+# 🔧 ✅ FIX 4 — Fix Loss Computation
+
+Use filtered labels only:
+
+```python
+loss = loss_fn(outputs, batch["labels"])
+```
+
+No change needed if dataset is already filtered.
+
+---
+
+# 🔧 ✅ FIX 5 — (Optional but Strong) Log Removed Columns
+
+```python
+removed = (~valid_mask).sum()
+
+logger.warning(f"Removed {removed} invalid emotion labels (single-class)")
+```
+
+---
+
+# 🧠 Why This is Correct (Industry Standard)
+
+This is exactly what real systems do:
+
+* **Google / Meta pipelines**
+* Drop degenerate labels automatically
+* Never trust dataset blindly
+
+---
+
+# ⚠️ What NOT To Do
+
+❌ Don’t:
+
+* Keep single-class columns
+* Assign fake weights
+* Try to oversample them
+* Add noise artificially
+
+👉 All of these lead to **false learning signals**
+
+---
+
+# 📈 Expected Impact
+
+| Before           | After               |
+| ---------------- | ------------------- |
+| Broken heads     | Clean label space   |
+| No gradient      | Meaningful learning |
+| Inflated metrics | Real metrics        |
+| Training noise   | Stable convergence  |
+
+---
+
+# 🔥 Important Insight
+
+This problem is **very serious** in your case because:
+
+* You have **20 emotion heads**
+* Many are degenerate
+* Without this fix → model capacity wasted
+
+---
+
+# 🚀 If You Want Next Step
+
+I can combine this with:
+
+* class weighting
+* focal loss
+* multitask scheduler
+* loss engine integration
+
+👉 into a **single clean patch across your repo**
+
+Just say:
+
+**"merge all fixes into one pipeline patch"**

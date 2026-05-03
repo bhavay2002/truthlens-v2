@@ -1,0 +1,249 @@
+🚀 TruthLens Graph Layer Audit — src/graph/ (12 files, 2,718 LOC)
+I traced the full pipeline (text → entity/narrative/temporal → metrics → features → vector → model input) and cross-checked every consumer in src/inference/, src/features/, src/pipelines/, and src/models/. Several issues are broken-at-runtime, not just code smells.
+________________________________________
+🔴 1. CRITICAL GRAPH BUGS
+🔴 G-C1 — GraphPipeline.run() raises AttributeError on every entity graph
+•	File: src/graph/graph_features.py:112 and :135
+•	Function: GraphFeatureExtractor.extract_from_graphs
+•	Issue: Calls self.entity_builder.extract_graph_features(entity_graph) but EntityGraphBuilder defines the method as extract_features (singular). NarrativeGraphBuilder uses extract_graph_features. Mismatch.
+•	Why broken: The exception is caught nowhere inside extract_from_graphs, propagates out of GraphPipeline.run(). Anything that turns on enable_entity_graph=True (the default) crashes the first time pipeline.run(text) is called.
+•	Fix:
+# src/graph/graph_features.py:112
+self.entity_builder.extract_features(entity_graph).to_dict()
+# OR (preferred — make the API consistent across both builders)
+Add an alias in EntityGraphBuilder:
+# src/graph/entity_graph.py — class EntityGraphBuilder
+def extract_graph_features(self, graph):  # alias for parity with NarrativeGraphBuilder
+    return self.extract_features(graph)
+🔴 G-C2 — GraphOutput(...) construction always raises ValidationError
+•	File: src/graph/graph_pipeline.py:223–232
+•	Function: GraphPipeline.run
+•	Issue 1: Passes entity_metrics= and narrative_metrics= to GraphOutput, but GraphOutput has model_config = ConfigDict(extra="forbid") and does not declare those fields (graph_schema.py:171). Pydantic raises immediately.
+•	Issue 2: Passes raw Dict[str, Dict[str, float]] adjacency dicts as entity_graph= / narrative_graph=, but GraphStructure expects {"nodes": List[str], "edges": Dict[str, List[str]]} — different shape, will also fail validation.
+•	Issue 3: Passes temporal_features=temporal_features where temporal_features is the dict returned by TemporalGraphAnalyzer.analyze(text).to_dict(). The pydantic field is Optional[TemporalFeatureModel] — pydantic can coerce, but TemporalFeatureModel requires entity_recurrence/entity_transition_rate/topic_shift_score/narrative_drift to all be present. Coercion is silent, so this part actually works — but the two issues above kill the call before it gets here.
+•	Why broken: First request to /analyze (or any code path that hits GraphPipeline.run) raises before returning a result.
+•	Fix:
+# src/graph/graph_pipeline.py — replace the GraphOutput(...) call
+graph_output = GraphOutput(
+    entity_graph=_to_graph_structure(entity_graph),       # see helper below
+    narrative_graph=_to_graph_structure(narrative_graph),
+    temporal_features=temporal_features,                  # dict → coerced
+    features=features,
+    embeddings=None,
+    explanation=explanation.to_dict() if explanation else None,
+    metadata={
+        "entity_metrics_keys": ",".join(entity_metrics.keys()),
+        "narrative_metrics_keys": ",".join(narrative_metrics.keys()),
+    },
+)
+And add the missing fields to GraphOutput (graph_schema.py) so the metrics aren't lost:
+entity_metrics: Optional[Dict[str, float]] = None
+narrative_metrics: Optional[Dict[str, float]] = None
+Helper:
+def _to_graph_structure(g: Optional[Dict[str, Dict[str, float]]]) -> Optional[GraphStructure]:
+    if not g:
+        return None
+    nodes = sorted(g.keys() | {n for nbrs in g.values() for n in nbrs})
+    edges = {n: sorted(g.get(n, {}).keys()) for n in nodes}
+    return GraphStructure(nodes=nodes, edges=edges)
+🔴 G-C3 — GraphExplainer.explain(...) raises TypeError on every call from GraphPipeline
+•	File: src/graph/graph_pipeline.py:191–196 vs src/graph/graph_explainer.py:158–164
+•	Issue: Pipeline calls explainer.explain(entity_graph=..., narrative_graph=..., temporal_features=...) but explain only accepts text= (kwarg-only via the leading *). temporal_features= is unknown → TypeError: explain() got an unexpected keyword argument 'temporal_features'. Conversely the pipeline never passes text=, so even if it didn't crash, _temporal_importance would always return {}.
+•	Why broken: Every request that hits the pipeline with the default enable_graph_explainer=True crashes the explainer block.
+•	Fix: Make the explainer accept the data the pipeline already has, and feed it the temporal dict directly instead of re-running the analyzer:
+# src/graph/graph_explainer.py
+def explain(self, *, entity_graph=None, narrative_graph=None,
+            text=None, temporal_features=None) -> GraphExplanation:
+    graph = entity_graph or narrative_graph or {}
+    node_imp = self._node_importance(graph)
+    edge_imp = self._edge_importance(graph)
+    if temporal_features is not None:
+        temporal_imp = self._normalize_temporal(temporal_features)
+    else:
+        temporal_imp = self._temporal_importance(text)
+    ...
+🔴 G-C4 — Silent metrics drop: pipeline emits entity_metrics, consumer reads entity_graph_metrics
+•	File: src/features/pipelines/feature_pipeline.py:168, 173 vs src/graph/graph_pipeline.py:227–228
+•	Issue: Pipeline result dict only contains graph_features, graph_output, graph_feature_vector, analysis_modules, graph_explanation. There is no entity_graph_metrics or narrative_graph_metrics key in the returned dict — only graph_output.entity_metrics (which today fails validation per G-C2). Consumer's .get("entity_graph_metrics", {}) silently returns {}. Result: the model never sees per-graph metric features even though the pipeline computes them.
+•	Fix: After fixing G-C2, also surface them in the result dict explicitly:
+# src/graph/graph_pipeline.py — at the return-dict construction
+result = {
+    "graph_output": graph_output,
+    "graph_features": features,
+    "entity_graph_metrics": entity_metrics,         # NEW
+    "narrative_graph_metrics": narrative_metrics,   # NEW
+}
+🔴 G-C5 — entity_graph and narrative_graph types disagree across the codebase
+•	File: All of src/graph/
+•	Issue: EntityGraphBuilder.build_graph and NarrativeGraphBuilder.build_graph return weighted Dict[str, Dict[str, float]]. But GraphAnalyzer.analyze, GraphExplainer._node_importance/_edge_importance, GraphEmbeddingGenerator._to_nx, and GraphFeatureExtractor.extract_from_graphs all annotate the input as Dict[str, List[str]]. The code "works" because Python iteration over a dict yields its keys, but:
+o	GraphAnalyzer.normalize_graph then calls for nbr in neighbors: if isinstance(nbr, str) — drops the weights entirely. Edge weights are lost between builder → analyzer.
+o	GraphExplainer._edge_importance does edge_scores[edge] = edge_scores.get(edge,0)+1.0 — counts every edge as 1.0 instead of using the actual weight.
+o	_node_importance does degree = len(neighbors) — fine for unweighted, but ignores edge strength.
+•	Why broken: The whole "🔥 weighted co-occurrence" claim in the builders is silently undone by every downstream consumer. Heavy edges and one-off mentions count the same.
+•	Fix: Pick one canonical type. Recommend Dict[str, Dict[str, float]] everywhere (it's a strict superset):
+# graph_analysis.py — normalize_graph
+for nbr, w in (neighbors.items() if isinstance(neighbors, dict) else ((n, 1.0) for n in neighbors)):
+    ...
+Then use the weights when computing degree = sum(weights), edge_score = w, etc. Also update type hints across graph_analysis.py, graph_explainer.py, graph_features.py, graph_embeddings.py, graph_visualization.py.
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+🟠 G-P1 — Triple-build of the same graph per request
+•	Location: GraphPipeline.run builds the entity graph once at L145, then GraphFeatureExtractor.extract_from_graphs (called at L177) re-builds it implicitly via self.entity_builder.extract_features(entity_graph) (OK, shared input), but extract_from_graphs also runs self.analyzer.analyze(entity_graph) (L115) and graph_embedding_vector(entity_graph) (L122). Each of those internally normalises and undirected-ifies the graph independently. Net cost: the same O(N+E) graph is normalised 3× per request.
+•	Fix: Compute normalised = to_undirected(normalize_graph(g)) ONCE in the pipeline and pass it down (or memoize on the dict id):
+# src/graph/graph_pipeline.py — after building entity_graph
+if entity_graph:
+    entity_graph = to_undirected(normalize_graph(entity_graph))   # canonicalise once
+Then have GraphAnalyzer/graph_embedding_vector accept an already_canonical=True flag to skip the re-pass.
+•	Expected speedup: ~2.5× on the graph stage (currently dominated by Python-loop normalisation).
+🟠 G-P2 — O(N²) Python loops in extract_features, compute_graph_metrics, _node2vec
+•	Location: entity_graph.py:174–180, graph_analysis.py:103–107, graph_embeddings.py:142–177
+•	Issue: Triangle counting and clustering are written as nested Python loops over node neighbours; _node2vec is a Python loop with np.random.choice per step (the worst case for numpy overhead). On a 100-node graph that's ~10⁴ Python-level iterations per request.
+•	Fix: Replace with sparse-matrix ops:
+import scipy.sparse as sp
+A = sp.csr_matrix(adj)             # build once from adjacency
+triangles = (A @ A @ A).diagonal().sum() / 6
+triplets = degrees * (degrees - 1) / 2
+clustering = (3 * triangles) / triplets.sum()
+For node2vec, use scipy.sparse.csgraph random walks or replace with a single eigen-decomp (you already have spectral_eigen_embedding).
+•	Expected speedup: 10–50× on graphs with >50 nodes.
+🟠 G-P3 — One-graph-at-a-time pipeline; no batching
+•	Location: every GraphPipeline.run(text) callsite
+•	Issue: GraphPipeline.run accepts a single text and the spaCy parser runs on it alone. EntityGraphBuilder.__init__ instantiates a new GraphPipeline (and therefore a fresh EntityGraphBuilder and NarrativeGraphBuilder) on every call to FeaturePreparer(...) because each component instantiates its own. With n_process=1 and no nlp.pipe, batch inference parses N texts serially.
+•	Fix: Add GraphPipeline.run_batch(texts: List[str]) that uses nlp.pipe(texts, batch_size=32, n_process=1) for the entity graph and vectorises the narrative-graph regex extraction across documents:
+def run_batch(self, texts: list[str]) -> list[dict]:
+    docs = list(self.entity_graph_builder.nlp.pipe(texts, batch_size=32))
+    return [self._run_from_doc(text, doc) for text, doc in zip(texts, docs)]
+•	Expected speedup: 3–5× on batch inference paths (batch_inference.py, feature_pipeline.batch_extract).
+🟠 G-P4 — Eigen decomposition on dense nx.to_numpy_array
+•	Location: graph_embeddings.py:229, 239
+•	Issue: nx.to_numpy_array(G) builds an O(N²) dense matrix even for sparse graphs; np.linalg.eigvalsh is O(N³). For long articles (~200 nodes) that's 8M flops per request.
+•	Fix: Use sparse Laplacian + scipy.sparse.linalg.eigsh(k=spectral_dim, which='LA') — converges in O(k·N) for sparse adjacency.
+________________________________________
+🟡 3. SEMANTIC ISSUES
+🟡 G-S1 — Narrative "graph" is actually a sentence-keyword bigram chain, not a graph
+•	File: src/graph/narrative_graph_builder.py:104–123
+•	Issue: For each sentence, _extract_keywords returns the most-frequent-tokens-by-count, then edges are added between every keyword in sentence i and every keyword in sentence i+1. There is no co-reference, no syntactic dependency, no entity linking. So the "narrative graph" is just top-k tokens per sentence × top-k tokens per next sentence. Calling narrative_graph_centralization on this is mostly noise.
+•	Fix (semantic): Tie the narrative graph to the spaCy noun-chunks / entities you've already extracted in EntityGraphBuilder, and edge nodes by shared sentence membership (giving genuine co-occurrence) plus temporal succession between sentences. Drop the regex tokeniser.
+🟡 G-S2 — Edge in entity graph is not directional but stored as if it were
+•	File: src/graph/entity_graph.py:131–135
+•	Issue: graph[a][b] += 1.0; graph[b][a] += 1.0 then calls to_undirected(graph) which sums them again — so each undirected co-occurrence ends up with weight 4 * count instead of 2 * count. The relative ordering survives, but downstream entropy / centralisation / density calculations all see inflated weights.
+•	Fix: Either store one direction at build time and let to_undirected symmetrize, or skip the to_undirected call (it's already symmetric by construction):
+graph[a][b] += 1.0      # only one direction at build time
+graph[b][a] += 1.0      # OR drop one and call to_undirected once
+# then DROP graph = to_undirected(graph) at L135
+________________________________________
+🧩 4. TOKEN / ENTITY ALIGNMENT ISSUES
+🧩 G-T1 — Entities lower-cased & stripped before becoming node IDs; .text offsets discarded
+•	File: src/graph/entity_graph.py:120–123
+•	Issue: ent.text.lower().strip() is the node id. ent.start_char/end_char are dropped. Two entities at different positions in the document with the same lemma collapse to one node — fine for co-occurrence, wrong for any explainability that needs to map a node back to a span in the source text. The GraphExplainer returns node_importance: {"obama": 0.4} — a downstream UI can't highlight which mention.
+•	Fix: Carry the alignment alongside the graph:
+return {
+    "graph": graph,                     # current return
+    "entity_spans": [(ent.text.lower().strip(), ent.start_char, ent.end_char)
+                     for sent in doc.sents for ent in sent.ents],
+}
+Update GraphPipeline.run to surface entity_spans so the API/explainer can highlight back into text.
+🧩 G-T2 — Narrative builder's "keywords" are not aligned with anything
+•	File: src/graph/narrative_graph_builder.py:47–63
+•	Issue: _extract_keywords uses its own regex \b[a-zA-Z]+\b, lowercased; this differs from spaCy tokenisation used in EntityGraphBuilder, from the global spacy_loader used in src/analysis/, AND from the model tokenizer. Consequence: a "node" in the narrative graph cannot be reliably mapped to either a spaCy token or a model subword.
+•	Fix: Replace the regex with a single canonical tokeniser (spaCy Doc) and keep Token.idx for span recovery. Same shared nlp instance as EntityGraphBuilder.
+________________________________________
+🚀 5. GPU / MEMORY ISSUES
+🚀 G-G1 — All graph features are CPU numpy.float32 → forced CPU↔GPU copy at the model boundary
+•	File: src/graph/graph_features.py:207, src/graph/graph_embeddings.py (returns np.ndarray)
+•	Issue: The graph layer is intentionally CPU-only (good for the spaCy stage), but the resulting feature vector is concatenated as np.float32 and only copied to GPU inside HybridTruthLensModel.forward. With batched inference this is N separate host→device syncs. The extract_feature_vector_from_features doesn't know the target device.
+•	Fix: Add a to_device helper at the pipeline edge so the batch inference path can do one pinned-memory copy:
+def to_pinned_tensor(vec: np.ndarray) -> torch.Tensor:
+    t = torch.from_numpy(vec).pin_memory()
+    return t  # caller does .to(device, non_blocking=True)
+Then feature_preparer.py should accumulate per-sample vectors and stack once before transfer.
+🚀 G-G2 — nx.to_numpy_array(G) materialises an N×N dense matrix for spectral / hybrid embeddings
+•	File: src/graph/graph_embeddings.py:229, 239
+•	Issue: For long articles entity graphs can have a few hundred nodes; dense float64 adjacency = ~few hundred KB per request, but the eigvalsh peak memory is O(N²) and the call is on the request hot path.
+•	Fix: See G-P4 above (sparse Laplacian + sparse eigensolver).
+________________________________________
+🔄 6. RECOMPUTATION ISSUES
+🔄 G-R1 — GraphPipeline is constructed in 6 different places, each a fresh spaCy load
+•	Location: api/app.py:116, truthlens_pipeline.py:59, feature_pipeline.py:121, inference_pipeline.py:71, feature_preparer.py:106, batch_inference.py:101, analyze_article.py:83
+•	Issue: Although EntityGraphBuilder now uses get_shared_nlp (good — audit fix §1.7), each GraphPipeline() still reinstantiates EntityGraphBuilder + NarrativeGraphBuilder + TemporalGraphAnalyzer + GraphAnalyzer + GraphFeatureExtractor + GraphExplainer + AnalysisIntegrationRunner. AnalysisIntegrationRunner initialises 15 analyzers (visible in startup logs). Per-request cost is small but per-process memory is paid 6×.
+•	Fix: Make GraphPipeline a singleton-per-process via a module-level get_default_pipeline():
+# src/graph/graph_pipeline.py
+_DEFAULT: Optional[GraphPipeline] = None
+def get_default_pipeline() -> GraphPipeline:
+    global _DEFAULT
+    if _DEFAULT is None:
+        _DEFAULT = GraphPipeline()
+    return _DEFAULT
+Update the 6 callsites to use it (kept overrideable for tests via dependency injection).
+🔄 G-R2 — GraphFeatureExtractor.extract_from_graphs re-extracts features that the pipeline already computed
+•	File: src/graph/graph_pipeline.py:162–180
+•	Issue: The pipeline calls self.graph_analyzer.analyze(entity_graph) (L163) and then immediately self.graph_feature_extractor.extract_from_graphs(...) (L177), which internally calls self.analyzer.analyze(entity_graph) again (graph_features.py:115). Same for narrative.
+•	Fix: Have extract_from_graphs accept pre-computed metrics:
+def extract_from_graphs(self, *, entity_graph=None, entity_metrics=None,
+                        narrative_graph=None, narrative_metrics=None):
+    entity_metrics = entity_metrics or (self.analyzer.analyze(entity_graph).to_dict() if entity_graph else {})
+    ...
+________________________________________
+🧹 7. UNUSED GRAPH MODULES
+Module	Status	Recommendation
+src/graph/graph_utils.py	UNUSED — no from src.graph.graph_utils anywhere	Either integrate into graph_analysis.py (replacing the duplicated normalize_graph/to_undirected/unique_edges there) or delete. Right now it's a parallel implementation of the same primitives.
+src/graph/graph_visualization.py	UNUSED at runtime — no importer in api/, src/inference/, src/features/	Keep only if there's a notebook/script use; otherwise move to scripts/ or delete.
+src/graph/graph_config.py (GraphConfigLoader, GraphConfig)	UNUSED — GraphPipeline uses its own GraphPipelineConfig and never reads config/config.yaml	Either wire GraphConfigLoader().load_from_yaml("config/config.yaml") into GraphPipeline.__init__, or remove. The fields it defines (min_keyword_length, max_keywords_per_sentence, min_edge_weight, feature_scale, enable_graph_embeddings) are currently hardcoded inside NarrativeGraphBuilder.__init__.
+src/graph/graph_schema.py (GraphOutput)	BROKEN — see G-C2	Fix the field set so it actually validates.
+narrative_graph_vector, temporal_graph_vector	Defined but only entity_graph_vector/graph_metrics_vector are used in extract_feature_vector_from_features	Either include in the master vector (along with the entity metrics) or delete. Today the model receives 0 narrative-vector features unless the legacy narrative_keys block fires (graph_features.py:190–202), and only because of an ad-hoc duplicate at L190.
+________________________________________
+⚙️ 8. CONFIG ISSUES
+⚙️ G-CFG1 — Two parallel config systems, neither wired to config/config.yaml
+•	GraphConfig (graph_config.py) is the YAML-aware one — never instantiated from config/config.yaml.
+•	GraphPipelineConfig (graph_pipeline.py) is the runtime one — has a different, smaller field set, no validation, no YAML loader.
+•	Fix: Drop GraphConfig or make it the source of truth and have GraphPipelineConfig.from_graph_config(cfg) translate. Add a graph: section to config/config.yaml and load it in GraphPipeline.__init__.
+⚙️ G-CFG2 — Hardcoded magic numbers
+•	NarrativeGraphBuilder(min_token_length=4, max_keywords_per_sentence=4) — defaults baked into __init__; pipeline never overrides.
+•	TemporalGraphAnalyzer(min_token_length=4) — same.
+•	GraphEmbeddingConfig(spectral_dim=8, walk_length=10, num_walks=10, embedding_dim=16) — never overridden.
+•	GraphExplainer._overall_score weights 0.4 / 0.3 / 0.3 — should be configurable.
+•	Fix: Move all to GraphConfig, validate at load time.
+⚙️ G-CFG3 — GraphPipelineConfig.return_vector and run_analysis_modules aren't represented in GraphConfig
+•	Schema drift between the two configs guarantees a YAML graph: block can never fully drive runtime behaviour.
+________________________________________
+🧪 9. EDGE CASE FAILURES
+🧪 G-E1 — Empty graph handling differs across modules
+•	EntityGraphBuilder.build_graph("a") (single token, no entities) → defaultdict(...) reduced to {} → analyzer returns all zeros ✅
+•	GraphEmbeddingGenerator.generate_embedding({}) → returns np.zeros(1) (size 1!) ❌ — but the caller extract_from_graphs then iterates for i, val in enumerate(emb) and emits a SINGLE feature graph_embedding_0. Vector length is non-deterministic (1 for empty, 28 for hybrid on populated graph). Downstream model expects fixed feature_dim.
+•	Fix: Always return an embedding of the configured target dimension (zero-pad on empty):
+if G.number_of_nodes() == 0:
+    return np.zeros(self._target_dim(), dtype=np.float32)
+Where _target_dim() returns the dim of the chosen embedding_type.
+🧪 G-E2 — TemporalGraphAnalyzer.analyze with one sentence
+•	Returns TemporalGraphFeatures(*([0.0] * 7)) (line 73). OK ✅ — but temporal_consistency = 1.0 - narrative_volatility then becomes 1.0 for an all-zero default in the populated path while 0.0 in the empty path. Empty-text bias: a 1-sentence document is "maximally consistent" in one branch and "minimally consistent" in the other. Pick a convention.
+🧪 G-E3 — Disconnected components count via BFS is single-source per component (good) but uses adjacency built from directed dict
+•	narrative_graph_builder._weak_components correctly symmetrises before BFS ✅
+🧪 G-E4 — Very large graphs (long articles, >500 nodes)
+•	The clustering loop in entity_graph.extract_features (L174–180) is O(N·k²) Python — measured ~0.3s on a 300-node graph. Combined with the eigendecomp (G-P4) the graph stage dominates request latency on long inputs.
+________________________________________
+✅ 10. VERIFIED COMPONENTS
+•	G-V1 Shared spaCy loader (get_shared_nlp) — correctly used by EntityGraphBuilder (audit §1.7 already applied).
+•	G-V2 GraphPipelineConfig.config_fingerprint() — proper SHA-256 of all fields, used as cache key in batch_feature_pipeline.py. ✅
+•	G-V3 merge_feature_blocks_strict raises on duplicate keys — prevents silent feature collisions between entity/narrative blocks. ✅
+•	G-V4 narrative_graph_builder._weak_components BFS is correct and uses deque.popleft (no quadratic list.pop(0)). ✅
+•	G-V5 Numerical guards: every divisor uses + EPS, np.log(p + EPS) is safe (no log(0)). ✅
+•	G-V6 EntityGraphBuilder falls back to a blank spaCy pipeline when en_core_web_sm is missing — no startup crash. ✅
+________________________________________
+📉 11. FINAL SCORE
+Score: 5.0 / 10
+Why not higher
+•	The pipeline has three independent runtime crashes (G-C1, G-C2, G-C3) on the default config. The app boots clean only because nothing exercises GraphPipeline.run until an actual analysis request arrives.
+•	A real silent data-loss bug (G-C4): every per-graph metric the analyzer computes is dropped before the model sees it, because the consumer reads keys that don't exist in the producer's output.
+•	Edge weights are computed but discarded by every consumer (G-C5), so the "weighted graph" claim is cosmetic.
+•	Two parallel config systems, neither wired to config.yaml.
+Steps to reach ≥ 9.5
+1.	Apply G-C1 through G-C5 (all 5 critical bugs — total ~30 LOC of changes).
+2.	Singleton GraphPipeline (G-R1) + de-duplicate metric computation (G-R2).
+3.	Wire GraphConfig into GraphPipeline and add a graph: block to config/config.yaml (G-CFG1).
+4.	Replace clustering / triangle counting with sparse-matrix ops (G-P2) and add run_batch (G-P3).
+5.	Carry entity-span alignment alongside the graph (G-T1) so the explainer can map back to text.
+6.	Delete (or integrate) the unused graph_utils.py and graph_visualization.py files.
+7.	Fix the empty-graph dimension contract in generate_embedding (G-E1).
+________________________________________
+The four 🔴 critical bugs (G-C1 to G-C4) will hard-fail or silently corrupt graph features the next time pipeline.run(text) is called from any analysis endpoint. Want me to apply those four fixes now (plus G-C5 type-unification, since it's the root cause for several of them)? They're contained edits inside src/graph/ and src/graph/graph_schema.py — no behaviour change to other modules.
+

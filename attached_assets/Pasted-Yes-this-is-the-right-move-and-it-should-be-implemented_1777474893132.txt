@@ -1,0 +1,321 @@
+Yes—this is the right move, and it should be implemented as a **first-class training path**, not a bolt-on. Below is a **production-grade design + reference implementation** for a true multi-task trainer factory that:
+
+* Uses a **single shared encoder** (no per-task re-inits)
+* Trains **all heads jointly** via `MultiTaskTruthLensModel`
+* Applies **task_weights** correctly in both **sampling** and **loss aggregation**
+* Keeps your current components (LossEngine, TaskScheduler) but **activates them properly**
+
+---
+
+# 🧠 Target Architecture
+
+```
+MultiTaskLoader  ──►  TaskScheduler (weighted) ──►  batch(task=Ti)
+                                           │
+                                           ▼
+                               MultiTaskTruthLensModel (shared encoder)
+                                           │
+                                           ▼
+                                      LossEngine (weighted)
+                                           │
+                                           ▼
+                                        Optimizer
+```
+
+---
+
+# 🔧 Factory: `create_multitask_trainer_fn`
+
+### Key responsibilities
+
+1. Build **unified task registry** (`task_types`)
+2. Instantiate **single multi-head model**
+3. Create **per-task datasets + loaders**
+4. Wrap them in a **MultiTaskLoader**
+5. Configure **weighted scheduler**
+6. Configure **LossEngine with task_weights**
+7. Return a **single Trainer** with one loop
+
+---
+
+## 🧩 Reference Implementation (clean + extensible)
+
+```python
+# src/training/create_multitask_trainer_fn.py
+
+from typing import Dict, Any
+import torch
+
+from src.models.multitask.multitask_truthlens_model import MultiTaskTruthLensModel
+from src.training.loss_engine import LossEngine, LossEngineConfig
+from src.training.task_scheduler import TaskScheduler, TaskSchedulerConfig
+from src.training.trainer import Trainer
+from src.training.training_step import TrainingStep
+from src.training.evaluation_engine import EvaluationEngine
+
+from src.data_processing.dataset_factory import build_dataset
+from src.data_processing.dataloader_factory import build_dataloader
+from src.data_processing.multitask_loader import MultiTaskLoader
+
+from src.config.task_config import get_task_type, get_all_tasks
+
+
+def create_multitask_trainer_fn(settings, data_bundle) -> Trainer:
+    """
+    Production-grade multi-task trainer factory.
+
+    - Single shared encoder
+    - Multi-head outputs
+    - Weighted task sampling + weighted loss
+    """
+
+    device = torch.device(settings.training.device)
+
+    # --------------------------------------------------
+    # 1. Build unified task map
+    # --------------------------------------------------
+    tasks = get_all_tasks()
+
+    task_types: Dict[str, str] = {
+        t: get_task_type(t)
+        for t in tasks
+    }
+
+    # --------------------------------------------------
+    # 2. Build datasets + dataloaders per task
+    # --------------------------------------------------
+    train_loaders = {}
+    val_loaders = {}
+
+    for task in tasks:
+        train_ds = build_dataset(
+            task=task,
+            split="train",
+            data=data_bundle[task]["train"],
+            max_length=settings.model.max_length,
+        )
+
+        val_ds = build_dataset(
+            task=task,
+            split="val",
+            data=data_bundle[task]["val"],
+            max_length=settings.model.max_length,
+        )
+
+        train_loaders[task] = build_dataloader(
+            dataset=train_ds,
+            batch_size=settings.training.batch_size,
+            shuffle=True,
+            num_workers=settings.training.num_workers,
+            pin_memory=True,
+        )
+
+        val_loaders[task] = build_dataloader(
+            dataset=val_ds,
+            batch_size=settings.training.batch_size,
+            shuffle=False,
+            num_workers=settings.training.num_workers,
+            pin_memory=True,
+        )
+
+    # --------------------------------------------------
+    # 3. MultiTaskLoader (unified iterator)
+    # --------------------------------------------------
+    multitask_train_loader = MultiTaskLoader(
+        dataloaders=train_loaders,
+        task_weights=settings.task_weights,
+        strategy="weighted"
+    )
+
+    multitask_val_loader = MultiTaskLoader(
+        dataloaders=val_loaders,
+        task_weights=None,
+        strategy="round_robin"
+    )
+
+    # --------------------------------------------------
+    # 4. Model (shared encoder, multi-head)
+    # --------------------------------------------------
+    model = MultiTaskTruthLensModel(settings.model)
+    model.to(device)
+
+    # --------------------------------------------------
+    # 5. Loss Engine (TRUE multi-task mode)
+    # --------------------------------------------------
+    loss_engine = LossEngine(
+        LossEngineConfig(
+            task_types=task_types,
+            task_weights=settings.task_weights,
+            normalization="mean"  # important for stability
+        )
+    )
+
+    # --------------------------------------------------
+    # 6. Scheduler (task sampling policy)
+    # --------------------------------------------------
+    task_scheduler = TaskScheduler(
+        TaskSchedulerConfig(
+            tasks=tasks,
+            task_weights=settings.task_weights,
+            strategy="weighted"
+        )
+    )
+
+    # --------------------------------------------------
+    # 7. Optimizer
+    # --------------------------------------------------
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=settings.training.lr,
+        weight_decay=settings.training.weight_decay,
+    )
+
+    # --------------------------------------------------
+    # 8. Training Step (AMP + clipping ready)
+    # --------------------------------------------------
+    training_step = TrainingStep(
+        model=model,
+        optimizer=optimizer,
+        loss_engine=loss_engine,
+        device=device,
+        use_amp=settings.training.use_amp,
+        max_grad_norm=settings.training.max_grad_norm,
+    )
+
+    # --------------------------------------------------
+    # 9. Evaluation Engine
+    # --------------------------------------------------
+    evaluation_engine = EvaluationEngine(
+        model=model,
+        device=device,
+    )
+
+    # --------------------------------------------------
+    # 10. Trainer
+    # --------------------------------------------------
+    trainer = Trainer(
+        model=model,
+        train_loader=multitask_train_loader,
+        val_loader=multitask_val_loader,
+        training_step=training_step,
+        evaluation_engine=evaluation_engine,
+        task_scheduler=task_scheduler,
+        epochs=settings.training.epochs,
+        device=device,
+    )
+
+    return trainer
+```
+
+---
+
+# ⚠️ Critical Implementation Notes
+
+## 1. Batch format MUST include task
+
+Every batch from `MultiTaskLoader` must look like:
+
+```python
+{
+    "task": "bias",
+    "input_ids": ...,
+    "attention_mask": ...,
+    "labels": ...
+}
+```
+
+Otherwise:
+
+* Loss routing ❌
+* Head selection ❌
+
+---
+
+## 2. Model forward must be task-aware
+
+Inside `MultiTaskTruthLensModel`:
+
+```python
+def forward(self, batch):
+    task = batch["task"]
+    head = self.heads[task]
+
+    shared = self.encoder(...)
+    logits = head(shared)
+
+    return {"task": task, "logits": logits}
+```
+
+---
+
+## 3. LossEngine must route per-task
+
+```python
+loss = loss_engine.compute(
+    task=batch["task"],
+    logits=outputs["logits"],
+    labels=batch["labels"]
+)
+```
+
+---
+
+## 4. No encoder re-init (guaranteed)
+
+Because:
+
+```python
+model = MultiTaskTruthLensModel(...)
+```
+
+👉 encoder instantiated **once**
+
+---
+
+# 🔥 Performance Enhancements (Strongly Recommended)
+
+Add this to config:
+
+```yaml
+training:
+  device: cuda
+  use_amp: true
+  max_grad_norm: 1.0
+  num_workers: 4
+  gradient_accumulation_steps: 2
+```
+
+---
+
+# 📊 What You Gain
+
+| Capability          | Before | After |
+| ------------------- | ------ | ----- |
+| Shared encoder      | ❌      | ✅     |
+| Task balancing      | ❌      | ✅     |
+| GPU utilization     | ❌      | ✅     |
+| Training efficiency | ❌      | ✅     |
+| Generalization      | ❌      | ✅     |
+
+---
+
+# 🧠 Final Verdict
+
+This is not just an improvement—this is **unlocking your architecture**.
+
+Right now your system is:
+
+> “multi-task capable, but single-task executed”
+
+After this:
+
+> “true multi-task system with controlled optimization dynamics”
+
+---
+
+If you want next:
+
+* I can implement a **MultiTaskLoader (weighted + efficient)**
+* Or add **dynamic task balancing (GradNorm / uncertainty weighting)** for even better performance
+
+Just tell me.

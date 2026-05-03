@@ -1,0 +1,169 @@
+You didn’t fix it yet — the logs confirm **the exact same failure is still happening**.
+
+---
+
+# 🚨 Still Broken (Same Root Cause)
+
+From your latest run:
+
+> `RuntimeError: Current CUDA Device does not support bfloat16` 
+
+### And again:
+
+* Predictor fails ❌
+* Pipeline continues ✅
+* Output is fake ⚠️
+
+```json
+"predictions keys": []
+"metrics": { "score": 0.0 }
+```
+
+👉 Your model is **still NOT executing**
+
+---
+
+# 🧠 What This Tells Me (Important Insight)
+
+* You **enabled GPU successfully** ✅
+* But you **did NOT change autocast dtype**
+* So code is still using:
+
+  ```python
+  dtype=torch.bfloat16   # ❌ still here
+  ```
+
+---
+
+# 🔧 Exact Fix (No Guessing Now)
+
+Go to:
+
+```
+src/models/encoder/transformer_encoder.py
+```
+
+### Around line ~279 (your crash line)
+
+You will see something like:
+
+```python
+with torch.autocast(
+    device_type="cuda",
+    dtype=torch.bfloat16
+):
+```
+
+---
+
+## ✅ Replace it with THIS:
+
+```python
+with torch.autocast(
+    device_type="cuda",
+    dtype=torch.float16
+):
+```
+
+---
+
+# ⚡ If you want a **proper fix (recommended)**
+
+Replace the whole block with:
+
+```python
+if torch.cuda.is_available():
+    capability = torch.cuda.get_device_capability()
+
+    if capability[0] >= 8:   # Ampere+
+        dtype = torch.bfloat16
+    else:
+        dtype = torch.float16
+else:
+    dtype = torch.float32
+
+if torch.cuda.is_available():
+    with torch.autocast(device_type="cuda", dtype=dtype):
+        encoder_outputs = self.encoder(**encoder_inputs)
+else:
+    encoder_outputs = self.encoder(**encoder_inputs)
+```
+
+---
+
+# 🧪 After Fix — What MUST change
+
+You should see:
+
+```text
+Predictor.predict SUCCESS
+```
+
+AND:
+
+```json
+"predictions keys": ["bias", "emotion", "propaganda", ...]
+"metrics": { "score": > 0 }
+```
+
+---
+
+# ⚠️ Right Now Your System Is Misleading
+
+Your logs say:
+
+```text
+SYSTEM COMPLETED SUCCESSFULLY
+```
+
+But actually:
+
+* ❌ Model never ran
+* ❌ Predictions empty
+* ❌ Metrics meaningless
+
+👉 This is **dangerous for demo / evaluation**
+
+---
+
+# 🔥 Also Still Pending (Don’t Ignore Later)
+
+## 1. Explainability still broken
+
+* SHAP / IG tied to same dtype issue
+
+## 2. Attention rollout bug
+
+```text
+unexpected keyword argument 'output_attentions'
+```
+
+---
+
+# 🚀 Bottom Line
+
+You are **one line away** from fixing your entire system:
+
+👉 Change:
+
+```python
+bfloat16 ❌
+```
+
+👉 To:
+
+```python
+float16 ✅
+```
+
+---
+
+# If you want next step
+
+After this fix, I can help you:
+
+* verify real model outputs
+* fix explainability fully (SHAP + IG working)
+* make pipeline production-safe (no silent failures)
+
+Just say 👍

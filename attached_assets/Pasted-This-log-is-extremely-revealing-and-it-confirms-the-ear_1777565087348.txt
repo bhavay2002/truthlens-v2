@@ -1,0 +1,255 @@
+This log is extremely revealing — and it confirms the earlier diagnosis with even **stronger evidence**. Let’s go straight to the technical truth.
+
+---
+
+# 🧠 1. Your system is NOT broken — but training control is
+
+From your run:
+
+* ✅ Data pipeline clean (auto-leakage removal working)
+* ✅ Multi-task setup correct
+* ✅ H100 utilization strong
+* ✅ Loss normalization + EMA active
+
+📍 
+
+👉 This is **not a beginner pipeline** — this is already advanced.
+
+---
+
+# 📊 2. True convergence point (precise)
+
+Let’s isolate the **actual signal**:
+
+| Epoch | Emotion   | Ideology | Bias | Propaganda | Verdict    |
+| ----- | --------- | -------- | ---- | ---------- | ---------- |
+| 1     | 0.619     | 0.448    | 0.81 | 0.92       | learning   |
+| 2     | 0.658     | 0.480    | 0.83 | 0.94       | improving  |
+| 3     | 0.674     | 0.501    | 0.83 | 0.94       | improving  |
+| 4     | **0.691** | 0.538    | 0.86 | 0.96       | 🔥 peak    |
+| 5     | 0.680     | 0.547    | 0.85 | 0.95       | ❌ drop     |
+| 6     | 0.689     | 0.557    | 0.87 | 0.96       | ⚠ noisy    |
+| 7     | ~0.689    | ↑        | ↑    | ↑          | ⚠ unstable |
+
+📍 
+
+---
+
+## 🧠 Key insight
+
+👉 **Epoch 4 is your clean optimum**
+
+Everything after that is:
+
+> ❗ stochastic fluctuation driven by unstable gradients
+
+---
+
+# 🚨 3. The REAL problem (now fully confirmed)
+
+## 🔥 Gradient explosion pattern
+
+You are hitting:
+
+```text
+174, 206, 217, 245, 290, 382, 453 (!!)
+```
+
+📍 
+
+---
+
+## 🧠 What this means technically
+
+You are in:
+
+> ❗ **post-convergence instability regime**
+
+This is NOT normal training.
+
+---
+
+### Why it happens
+
+Combination of:
+
+1. ❌ No gradient clipping
+2. ❌ Slightly high LR
+3. ⚠ Multi-task loss imbalance
+4. ⚠ Large batch + grad_accum = delayed explosion
+
+---
+
+# ⚠️ 4. Why epoch 6–7 looks “better” sometimes
+
+You may think:
+
+> “metrics improved again at epoch 6/7”
+
+That is **misleading**.
+
+---
+
+## Reality:
+
+* Gradients are chaotic
+* Model is jumping in parameter space
+* Some tasks improve randomly
+* Others degrade silently
+
+👉 This is **not generalization — it's noise**
+
+---
+
+# 🧠 5. Multi-task imbalance (confirmed stronger)
+
+Your weights:
+
+```python
+emotion: 1.5
+ideology: 0.7  ❌
+propaganda: 0.8
+```
+
+📍 
+
+---
+
+## Effect:
+
+* Propaganda → saturates (0.96+)
+* Narrative → already high
+* Ideology → lagging behind entire training
+
+👉 Model is **under-training the hardest task**
+
+---
+
+# 🔧 6. What you MUST fix (precise, no fluff)
+
+---
+
+## ✅ Fix 1 — Gradient clipping (non-negotiable)
+
+Add immediately:
+
+```python
+torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+```
+
+---
+
+## ✅ Fix 2 — Early stopping (your biggest bug)
+
+Right now:
+
+👉 trainer is **blind to degradation**
+
+---
+
+### Correct implementation:
+
+```python
+best_score = -inf
+no_improve = 0
+
+MIN_DELTA = 0.003
+PATIENCE = 2
+MIN_EPOCHS = 4
+
+if epoch >= MIN_EPOCHS:
+    if current_score > best_score + MIN_DELTA:
+        best_score = current_score
+        no_improve = 0
+    else:
+        no_improve += 1
+
+    if no_improve >= PATIENCE:
+        stop_training = True
+```
+
+---
+
+## ✅ Fix 3 — Reduce LR (important)
+
+Your gradient spikes confirm LR is slightly aggressive.
+
+```python
+lr = lr * 0.7
+```
+
+---
+
+## ✅ Fix 4 — Rebalance task weights
+
+```python
+ideology: 1.1   # from 0.7
+propaganda: 0.7
+emotion: 1.3
+```
+
+---
+
+## ✅ Fix 5 — Optional (high impact)
+
+### Gradient logging threshold alert:
+
+```python
+if grad_norm > 100:
+    logger.warning("Gradient spike detected")
+```
+
+---
+
+# 🧠 7. What your system will look like AFTER fixes
+
+| Metric             | Before   | After      |
+| ------------------ | -------- | ---------- |
+| Grad norm          | 10–450 ❌ | 5–40 ✅     |
+| Convergence        | noisy    | clean      |
+| Best epoch         | unclear  | 4–5        |
+| Ideology score     | weak     | stronger   |
+| Training stability | chaotic  | controlled |
+
+---
+
+# 🏁 8. Final diagnosis (no ambiguity)
+
+### ❓ Why training keeps going?
+
+👉 Because:
+
+> ❌ **early stopping logic is missing / ineffective**
+
+---
+
+### ❓ Why gradients explode?
+
+👉 Because:
+
+> ❌ **no clipping + slightly high LR + multi-task imbalance**
+
+---
+
+### ❓ What is the correct model checkpoint?
+
+👉 **Epoch 4 checkpoint is your best model**
+
+---
+
+# 🚀 9. If you want next level (serious upgrade)
+
+I can now give you:
+
+### 🔥 Production-grade trainer upgrade:
+
+* multi-metric early stopping (not just emotion)
+* gradient-aware LR decay
+* automatic instability detection
+* task-balanced adaptive weighting (dynamic)
+
+Just say:
+
+> **“upgrade trainer to production v2”**
+
+and paste your `trainer.py`.

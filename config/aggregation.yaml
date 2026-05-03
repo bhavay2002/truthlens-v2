@@ -1,0 +1,29 @@
+config_version: v1
+
+strict_mode: false
+enable_logging: true
+enable_explanations: true
+enable_risk: true
+
+normalization:
+  method: minmax
+  feature_range: [0.0, 1.0]
+
+weights:
+  version: exp_v2
+  allow_dynamic_adjustment: true
+  weights:
+    bias: 0.45
+    emotion: 0.25
+    narrative: 0.20
+    analysis_influence_manipulation: 0.10
+
+risk:
+  low_threshold: 0.25
+  medium_threshold: 0.65
+
+attribution:
+  method: integrated_gradients
+  top_k: 5
+  normalize: true
+  use_confidence_weighting: true

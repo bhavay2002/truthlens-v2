@@ -1,0 +1,248 @@
+Now this is **the final, definitive failure**—and it confirms exactly what I warned earlier, but now at evaluation time.
+
+---
+
+# 🚨 FINAL ERROR (Confirmed)
+
+```text
+IndexError: The shape of the mask [64, 11] 
+does not match tensor [64, 20]
+```
+
+📍 From your run: 
+
+---
+
+# 🧠 What This Means (No ambiguity)
+
+You now have:
+
+| Component                | Shape      |
+| ------------------------ | ---------- |
+| **Model output (preds)** | `[64, 20]` |
+| **Mask / labels**        | `[64, 11]` |
+
+👉 Same mismatch as before—but now it’s hitting **evaluation instead of training**
+
+---
+
+# 🔥 Root Cause (Fully Confirmed)
+
+From your logs:
+
+### Dataset
+
+```text
+Dropped 9 columns → kept 11/20
+```
+
+### Model
+
+```text
+MultiLabelHead initialized | num_labels=20
+```
+
+👉 You **NEVER fixed this mismatch**
+
+---
+
+# 🧨 Why It Survived Training
+
+Training didn’t crash because:
+
+* Loss likely uses only active columns
+* Or masking happens internally
+
+But evaluation:
+
+```python
+preds = preds[mask]
+```
+
+👉 Requires **exact shape alignment**
+
+💥 Boom.
+
+---
+
+# ⚠️ This Is NOT a small bug
+
+This is a **core architectural inconsistency**:
+
+> Your pipeline is dynamically reducing labels, but your model is static.
+
+---
+
+# ✅ CORRECT FIX (ONLY VALID SOLUTION)
+
+## 🔧 Make model output dynamic
+
+### In `create_trainer_fn`
+
+Right after dataset creation:
+
+```python
+active_labels = dataset.active_columns   # or similar
+num_labels = len(active_labels)
+```
+
+---
+
+### Then:
+
+```python
+model = EmotionClassifier(
+    num_emotions=num_labels   # 🔥 NOT 20
+)
+```
+
+---
+
+# 🔧 ALSO FIX EVALUATION
+
+Your evaluation currently assumes:
+
+```python
+preds.shape == labels.shape
+```
+
+That will only be true if model is fixed.
+
+---
+
+# 🚫 DO NOT DO THESE (Common Mistakes)
+
+## ❌ Patch mask to 20
+
+```python
+mask = pad(mask)   # WRONG
+```
+
+## ❌ Slice preds manually
+
+```python
+preds = preds[:, active_indices]  # temporary hack
+```
+
+👉 These create silent bugs in training
+
+---
+
+# 🧠 Proper Design (Production-grade)
+
+You must unify **three components**:
+
+---
+
+## 1. Dataset
+
+```python
+dataset.active_columns = ['emotion_2', ..., 'emotion_19']
+```
+
+---
+
+## 2. Model
+
+```python
+num_labels = len(dataset.active_columns)
+```
+
+---
+
+## 3. Loss + Evaluation
+
+ALL must use same dimension:
+
+```python
+[B, num_labels]
+```
+
+---
+
+# ⚡ Your Current System State
+
+| Component          | Status               |
+| ------------------ | -------------------- |
+| GPU                | ✅ perfect            |
+| Bias task          | ✅ working            |
+| Emotion training   | ⚠️ partially working |
+| Emotion evaluation | ❌ FAILING            |
+| Root issue         | ❌ label mismatch     |
+
+---
+
+# 🔥 Additional Observation (Important)
+
+You also have:
+
+```text
+LR reduced (factor=0.5) due to instability
+```
+
+👉 This is because:
+
+* Wrong label alignment
+* Loss behaving inconsistently
+
+Fixing label dimension → stabilizes training too
+
+---
+
+# 🎯 Final Action Plan
+
+## MUST DO
+
+### 1. Fix model initialization
+
+```python
+num_labels = len(active_columns)
+```
+
+---
+
+### 2. Pass this everywhere
+
+* model
+* loss
+* evaluation
+
+---
+
+## SHOULD DO
+
+### Log sanity check
+
+```python
+assert logits.shape[1] == labels.shape[1]
+```
+
+---
+
+# 🚀 After This Fix
+
+* ✅ Emotion training stable
+* ✅ Evaluation works
+* ✅ No mask mismatch
+* ✅ No hidden bugs
+
+---
+
+# 🧩 Bottom Line
+
+You’re not dealing with random bugs anymore.
+
+👉 This is a **system design issue: dynamic data vs static model**
+
+Fix that → your pipeline becomes **fully consistent and production-ready**
+
+---
+
+# 💬 If you want next step
+
+I can:
+
+* Refactor your pipeline into **auto-synced label system (no manual bugs ever again)**
+* Or convert everything into a **true multi-task shared encoder (massive efficiency gain)**
+
+Right now, this is the **last real blocker**.

@@ -1,0 +1,131 @@
+I'll run the full end-to-end audit you described, combining v13 (system correctness) and v14 (GPU optimization) since v14 is the upgrade. Per the pattern of previous audit phases, this will be AUDIT-ONLY — a structured report with code-level fixes you can authorize in a follow-up.
+Let me start by reading the entry points and tracing the pipeline:
+6 actions
+Now let me read the key downstream modules in parallel:
+5 actions
+I'm already seeing what looks like a critical integration bug: truthlens_pipeline.py imports Predictor from src.inference.inference_pipeline, but the actual class there is PredictionPipeline. Let me verify this and trace more:
+4 actions
+Critical bug #1 confirmed: Predictor doesn't exist in src/inference/inference_pipeline.py. Both main.py (via TruthLensPipeline) and truthlens_pipeline.py are broken at import-time. Let me trace the rest:
+9 actions
+I've finished the end-to-end trace through main.py → truthlens_pipeline → analysis/preprocessing/orchestrator → graph/inference/aggregation/explainability/evaluation. Here's the structured audit. No code changes yet — awaiting your authorization.
+________________________________________
+🔍 TruthLens v13/v14 — End-to-End System Audit
+Scope: main.py → src/pipelines/truthlens_pipeline.py → all downstream subsystems
+Target dataset: 10-row × 6-task synthetic (bias / ideology / propaganda / narrative / narrative_frame / emotion)
+Workflow status: ✅ api/app.py (uvicorn) imports cleanly. ❌ main.py and TruthLensPipeline are broken at import time.
+________________________________________
+🔴 CRITICAL — system-blocking, verified by reproduction
+CRIT-1 — Wrong Predictor import (import-time crash)
+File: src/pipelines/truthlens_pipeline.py:14
+from src.inference.inference_pipeline import Predictor
+That module exports only PredictionPipeline / PredictionPipelineConfig. The real Predictor class lives at src/models/inference/predictor.py:39. Reproduced:
+ImportError: cannot import name 'Predictor' from 'src.inference.inference_pipeline'
+Cascade: main.py:33 cannot import → entire offline driver dead.
+Fix: from src.models.inference.predictor import Predictor
+________________________________________
+CRIT-2 — Predictor() fallback can never construct
+File: src/pipelines/truthlens_pipeline.py:56
+self.predictor = predictor or Predictor()
+Predictor.__init__(self, model: nn.Module, ...) requires model. Even with the import fixed, Predictor() raises:
+TypeError: __init__() missing 1 required positional argument: 'model'
+Fix: require predictor (no or fallback) or build one internally via ModelLoader().load(...).
+________________________________________
+CRIT-3 — predict(text) shape mismatch
+File: src/pipelines/truthlens_pipeline.py:139
+predictions = self.predictor.predict(prep.normalized_text)
+Predictor.predict(input_ids: Tensor, attention_mask: Tensor, ...) expects two tensors. Calling it with a str will fail inside input_ids.unsqueeze(0).
+Fix: tokenize first (tokenizer(text, return_tensors="pt")), then pass input_ids, attention_mask. Better: thread a tokenizer into TruthLensPipeline.__init__ and centralize this.
+________________________________________
+CRIT-4 — Evaluation always silently dies on labels=None
+File: src/pipelines/truthlens_pipeline.py:194
+evaluation = run_evaluation_pipeline(..., labels=None)
+evaluation_pipeline.py:175 declares labels: Dict[str, Any] (required). Inside: np.asarray(labels[task]) → TypeError: 'NoneType' object is not subscriptable. Caught by the broad except at line 196 → evaluation block is always None.
+Fix: either gate enable_evaluation on a real labels payload being passed in, or remove the eval call from analyze() (eval belongs in a separate driver, not per-article inference).
+________________________________________
+CRIT-5 — data/ directory does not exist
+File: main.py:69-100 (settings → bias_train / ideology_train / …)
+ls data/ → No such file or directory. run_data_pipeline will hard-fail at the first dataset load. Required for the v13 10-row simulation.
+Fix: add a data/synthetic/ fixture (10 rows × 6 tasks) and either point settings.data.* at it, or add a --mode infer flag that skips section 4-5 of main.py.
+________________________________________
+🟠 HIGH — wrong outputs, silent fallbacks
+HIGH-1 — Same predict(text) mismatch in explainability wiring
+truthlens_pipeline.py:176 passes predict_fn=self.predictor.predict to run_explainability_pipeline, whose contract is Callable[[str], Dict]. Same signature mismatch as CRIT-3. Swallowed by try/except → explainability always silently disabled.
+HIGH-2 — Profile passed positionally as model_outputs
+truthlens_pipeline.py:149
+aggregation = self.aggregation_pipeline.run(profile, text=prep.normalized_text)
+First positional arg of AggregationPipeline.run is model_outputs, not profile. Code path _adapt_profile (the comment at aggregation_pipeline.py:178 explicitly says this is what truthlens_pipeline.py relies on) never runs — the profile is fed straight into FeatureMapper.map_from_model_outputs as if it were raw logits.
+Fix: self.aggregation_pipeline.run(profile=profile, text=...).
+HIGH-3 — model_version always None
+Line 208: predictions.get("model_version"). Predictor.predict returns {logits, probabilities, predictions} — no version key. Metadata is lossy.
+HIGH-4 — Predictor has no tokenizer attribute
+Line 192: getattr(self.predictor, "tokenizer", None). Predictor.__init__ doesn't accept a tokenizer. Evaluation runs with tokenizer=None → collect_all_tasks crashes when it calls tokenizer(...). Combined with CRIT-4, eval is doubly dead.
+HIGH-5 — Stage timers for explainability/evaluation are no-ops
+Lines 181 & 199:
+stage_time["explainability"] = stage_time.get("explainability", 0.0)
+No t0 = time.time() ever set. Always logs 0.0 ms for two of the heaviest stages — defeats the purpose of GPU profiling.
+________________________________________
+🚀 GPU / PERFORMANCE
+ID	Issue	Location
+GPU-1	pipeline.analyze(text) called in a Python for loop over 3 texts in main.py:186. No batching; batch_size=1 × 6 task heads on GPU = ~95 % idle.	main.py:180-188
+GPU-2	Predictor.predict_batch exists but analyze() always uses single-sample predict() → per-call unsqueeze/squeeze overhead.	truthlens_pipeline.py:139
+GPU-3	No AMP at the pipeline boundary. PredictionPipeline honors TRUTHLENS_AMP_DTYPE env var; Predictor ignores it entirely. Long articles run FP32.	src/models/inference/predictor.py
+GPU-4	No torch.cuda.empty_cache() between articles; for 10-row × 6-task scoring on a single GPU this is fine, but for batched inference of full dataset it leaks.	truthlens_pipeline.py
+GPU-5	build_default_registry() (18+ analyzers) instantiated per TruthLensPipeline.__init__ at line 67 — should be a singleton like the graph pipeline (G-R1) already is.	truthlens_pipeline.py:67
+GPU-6	Analysis layer (analysis_orchestrator.run) and graph layer (graph_pipeline.run) at lines 100 & 117 are sequential and independent — could run via ThreadPoolExecutor for ~30-40 % wall-time saving.	truthlens_pipeline.py:98-131
+________________________________________
+🔄 INTEGRATION / WIRING
+ID	Issue
+WIRE-1	Two parallel inference orchestrators exist: PredictionPipeline (src/inference/inference_pipeline.py, fully featured: cache + log + AMP + batch + format) and TruthLensPipeline.predictor (raw Predictor). The pipeline duplicates preprocessing and skips PredictionPipeline's caching/logging. Architectural fork.
+WIRE-2	from src.aggregation.truthlens_score_calculator import TruthLensScoreCalculator (line 16) used only in the aggregation-failure except branch (line 163). AggregationPipeline already wraps the same calculator at line 85. Redundant.
+WIRE-3	enable_evaluation=True is wired into a per-article entry point, but run_evaluation_pipeline is a dataset-level operation (it expects texts: List[str], labels: Dict). Conceptually wrong placement.
+________________________________________
+💾 CONFIG
+ID	Issue
+CFG-1	main.py has no CLI flags — no way to run inference without retraining. Need --mode {train,infer,both} and --num-samples N.
+CFG-2	enable_explainability=True, enable_evaluation=True hardcoded at main.py:176-177. Should be config-driven.
+CFG-3	model_version hardcoded as "truthlens-v2" in aggregation_pipeline.py:359 — should come from config.model.version (single source).
+________________________________________
+🧪 EDGE / RESILIENCE
+ID	Issue
+EDGE-1	analyze() at line 80-83 only validates non-empty string. No max-length cap → 10 MB string goes straight into analysis + graph + predictor.
+EDGE-2	Broad except Exception at lines 128, 160, 178, 196 with no result["errors"] accumulator. Pipeline "succeeds" with empty outputs. Caller has no way to know what failed.
+EDGE-3	Line 139 prediction has no try/except — crashes the whole analyze(). Inconsistent with the other 4 stages.
+EDGE-4	predictions.get("model_version") at line 208 assumes predictions is a dict; if predictor returned None (defensive), would AttributeError.
+________________________________________
+🧹 DEAD / DUPLICATION
+ID	Issue
+DEAD-1	TruthLensScoreCalculator import + instance (lines 16, 58) only used in the aggregation except branch.
+DEAD-2	Entire evaluation block (run_evaluation_pipeline, lines 19, 188-199) is dead code given CRIT-4 + HIGH-4 — silently always returns None.
+________________________________________
+📉 10-ROW × 6-TASK SIMULATION
+Cannot execute end-to-end as-is. Failure cascade:
+1.	python main.py → ImportError at module load (CRIT-1) → exit code 1.
+2.	With CRIT-1 patched → TypeError building Predictor() (CRIT-2).
+3.	With CRIT-2 patched → AttributeError / shape error inside Predictor.predict on string input (CRIT-3).
+4.	With CRIT-3 patched → FileNotFoundError on data/bias/train.csv (CRIT-5).
+5.	Even after all five → aggregation runs the wrong code path (HIGH-2), evaluation silently disabled (CRIT-4 + HIGH-4), explainability silently disabled (HIGH-1), stage timers report 0.0 ms (HIGH-5).
+Estimated runtime once fixed (RTX 3090, batch_size=8):
+•	Analysis + graph: ~120 ms/article × 10 = 1.2 s
+•	Predictor (batched 6-head): ~80 ms × 2 batches = 0.16 s
+•	Aggregation: ~30 ms × 10 = 0.3 s
+•	Total: ~2 s per 10-row pass
+________________________________________
+✅ POSITIVES (what's already correct)
+1.	get_default_pipeline() graph singleton (G-R1 fix is alive at line 62).
+2.	AggregationPipeline._adapt_profile is correctly designed — just not reached due to HIGH-2.
+3.	PreprocessingPipeline → AnalysisOrchestrator flow is clean.
+4.	PredictionPipeline (the other orchestrator) is well-engineered: cache, AMP env, batch — sadly bypassed.
+5.	BiasProfileBuilder and aggregation_pipeline.run(profile=...) Branch B is fully implemented and tested.
+________________________________________
+🎯 RECOMMENDED FIX ORDER (for follow-up)
+Phase	IDs	Effort
+P1 — unbreak imports	CRIT-1, CRIT-2, WIRE-2	~20 min
+P2 — unbreak data flow	CRIT-3, HIGH-1, HIGH-2, HIGH-4	~45 min
+P3 — eval + simulation	CRIT-4, CRIT-5, EDGE-2, EDGE-3	~45 min
+P4 — GPU + perf	GPU-1, GPU-2, GPU-5, GPU-6, HIGH-5	~60 min
+P5 — config + cleanup	CFG-1/2/3, DEAD-1/2, EDGE-1, EDGE-4	~30 min
+Total estimated: ~3.5 hours of focused edits, then ~10 min for the 10-row simulation.
+________________________________________
+Audit phase complete. No code changes made. Authorize which phases to implement (P1 only, P1+P2, all five, etc.) and I'll proceed.
+Checkpoint made1 minute ago
+

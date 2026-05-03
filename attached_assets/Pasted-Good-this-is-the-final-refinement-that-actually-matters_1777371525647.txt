@@ -1,0 +1,374 @@
+Good—this is the **final refinement that actually matters in production**.
+Your current end-to-end prompt  is strong on correctness, but it is **not aggressive enough on GPU optimization**, which is where you’ll get **2–10× real gains**.
+
+Below is the **upgraded FINAL PROMPT (v14 – END-TO-END + GPU-OPTIMIZATION PRIORITY)** 👇
+
+---
+
+# 🚀 **TRUTHLENS FULL SYSTEM AUDIT PROMPT (v14 – GPU OPTIMIZATION PRIORITY)**
+
+You are a **principal ML systems architect, CUDA/GPU performance engineer, and production pipeline auditor**.
+
+Your task is to perform a **COMPLETE END-TO-END AUDIT of the TruthLens system**, starting from:
+
+```python
+main.py
+→ src/pipelines/truthlens_pipeline.py
+→ ALL downstream modules
+```
+
+---
+
+# 🎯 **PRIMARY MANDATE (STRICT)**
+
+> **The system must be fully correct AND GPU-optimized for maximum throughput without loss of accuracy.**
+
+You must ensure:
+
+* No pipeline errors ❌
+* No data/schema mismatch ❌
+* No token misalignment ❌
+* No incorrect outputs ❌
+* No CPU bottlenecks ❌
+* No unnecessary GPU underutilization ❌
+* No redundant computation ❌
+
+---
+
+# ⚡ **GPU OPTIMIZATION PRIORITY (OVERRIDES EVERYTHING)**
+
+You MUST aggressively audit for:
+
+### 🚀 Device Usage
+
+* Model ALWAYS on GPU
+* Inputs moved with:
+
+  ```python
+  tensor.to(device, non_blocking=True)
+  ```
+* No CPU fallback
+
+---
+
+### 🚀 DataLoader Efficiency
+
+* `pin_memory=True`
+* `num_workers > 0`
+* `persistent_workers=True`
+* optimal `prefetch_factor`
+
+---
+
+### 🚀 Forward Pass Optimization
+
+* `torch.no_grad()` in inference
+* `model.eval()` set
+* mixed precision:
+
+  ```python
+  torch.cuda.amp.autocast()
+  ```
+* optional:
+
+  ```python
+  torch.compile(model)
+  ```
+
+---
+
+### 🚀 Memory Optimization
+
+* no tensor duplication
+* no `.cpu().numpy()` mid-pipeline
+* reuse tensors
+
+---
+
+### 🚀 Batching (CRITICAL)
+
+* NO per-sample inference ❌
+* batch everything:
+
+  * tokenization
+  * model forward
+  * explainability (where possible)
+
+---
+
+### 🚀 Recompute Elimination
+
+* tokenizer reused
+* model forward reused
+* features cached
+* explanations reused
+
+---
+
+# 🧭 **FULL PIPELINE TRACE (MANDATORY)**
+
+```python
+Input Data
+→ Data Layer
+→ Features
+→ Analysis
+→ Graph (if used)
+→ Model (GPU)
+→ Explainability
+→ Aggregation
+→ Inference Output
+→ Evaluation
+```
+
+---
+
+# 🧪 **MANDATORY EXECUTION TEST (REAL DATA)**
+
+You MUST simulate execution using **10-row dataset (all 6 tasks)** from your previous prompt.
+
+### ADDITIONAL GPU CHECK:
+
+* Run batch size:
+
+  * small (1)
+  * medium (8–16)
+  * large (max GPU fit)
+
+➡️ Detect scaling inefficiencies
+
+---
+
+# 🔥 **GPU-FOCUSED AUDIT DIMENSIONS**
+
+---
+
+## 1. 🔴 **CRITICAL GPU MISUSE**
+
+Detect:
+
+* model on CPU ❌
+* tensors on mixed devices ❌
+* repeated `.to(device)` ❌
+* `.cpu()` inside pipeline ❌
+
+---
+
+## 2. 🟠 **CPU BOTTLENECKS**
+
+Detect:
+
+* preprocessing inside loop
+* tokenization per sample
+* Python loops instead of vectorization
+
+---
+
+## 3. 🟡 **BATCHING FAILURES**
+
+Detect:
+
+* per-sample processing
+* inconsistent batch sizes
+* inefficient padding
+
+---
+
+## 4. 🚀 **FORWARD PASS INEFFICIENCY**
+
+Detect:
+
+* repeated model forward calls
+* no mixed precision
+* gradients enabled during inference
+
+---
+
+## 5. 🔄 **RECOMPUTATION ISSUES**
+
+Trace duplication of:
+
+* tokenization
+* feature extraction
+* explainability
+* aggregation
+
+---
+
+## 6. 💾 **MEMORY INEFFICIENCY**
+
+Detect:
+
+* tensor cloning
+* unnecessary copies
+* large intermediate tensors
+
+---
+
+## 7. ⚡ **PIPELINE PARALLELISM**
+
+Check:
+
+* DataLoader parallelism
+* CPU–GPU overlap
+* async execution
+
+---
+
+## 8. 🧠 **MULTI-TASK GPU SCALING**
+
+Ensure:
+
+* all task heads processed in single forward pass
+* no repeated passes per task
+
+---
+
+## 9. 🧪 **THROUGHPUT TEST**
+
+Estimate:
+
+* samples/sec
+* GPU utilization %
+
+Flag if:
+
+* GPU idle > 40% ❌
+
+---
+
+## 10. 📉 **LATENCY ANALYSIS**
+
+Measure:
+
+* per-batch latency
+* per-sample latency
+
+---
+
+# 📊 **STRICT OUTPUT FORMAT**
+
+---
+
+## 🔴 1. CRITICAL GPU BUGS
+
+* Location:
+* Issue:
+* Why it kills performance:
+* Exact fix:
+
+---
+
+## 🟠 2. CPU BOTTLENECKS
+
+---
+
+## 🟡 3. BATCHING ISSUES
+
+---
+
+## 🚀 4. GPU UTILIZATION ISSUES
+
+---
+
+## 🔄 5. RECOMPUTATION ISSUES
+
+---
+
+## 💾 6. MEMORY ISSUES
+
+---
+
+## ⚡ 7. PARALLELISM ISSUES
+
+---
+
+## 🧠 8. MULTI-TASK SCALING ISSUES
+
+---
+
+## 🧪 9. THROUGHPUT RESULTS
+
+* samples/sec:
+* GPU utilization:
+* bottleneck stage:
+
+---
+
+## 🧪 10. LATENCY RESULTS
+
+---
+
+## 🧹 11. UNUSED MODULES
+
+---
+
+## ⚙️ 12. CONFIG ISSUES
+
+---
+
+## ✅ 13. VERIFIED GPU-OPTIMIZED COMPONENTS
+
+---
+
+## 📉 14. FINAL SCORE
+
+* Score: /10
+* Why not 10:
+* Steps to reach ≥9.5:
+
+---
+
+# ⚠️ **MANDATORY RULES**
+
+* GPU optimization > everything else
+* MUST eliminate CPU bottlenecks
+* MUST enforce batching
+* MUST detect recomputation
+* MUST give code-level fixes
+* MUST quantify performance
+
+---
+
+# 🎯 **SUCCESS CRITERIA (FINAL SYSTEM)**
+
+A system where:
+
+* GPU utilization is **>90%** ✅
+* Fully batch-optimized ✅
+* No redundant computation ✅
+* Latency minimized ✅
+* Throughput maximized ✅
+* Multi-task inference efficient ✅
+* End-to-end pipeline stable ✅
+
+---
+
+# 🔥 **WHY THIS VERSION IS CRITICAL**
+
+Compared to your previous version :
+
+* Shifts focus from **correctness → performance dominance**
+* Forces **real production constraints**
+* Detects **hidden GPU inefficiencies**
+* Ensures **scalability (most important for deployment)**
+
+---
+
+# 🚀 NEXT STEP
+
+If you want **real system gains**:
+
+👉 Say **“run GPU-optimized full audit”**
+
+I’ll:
+
+* trace your pipeline
+* identify exact GPU bottlenecks
+* rewrite critical sections
+* estimate **real speedup (often 3–12×)**
+
+---
+
+This is the step where your system goes from:
+
+> **“working correctly” → “production-grade high-performance system”**

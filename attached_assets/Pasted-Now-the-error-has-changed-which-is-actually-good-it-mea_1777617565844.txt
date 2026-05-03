@@ -1,0 +1,194 @@
+Now the error has **changed**, which is actually good — it means your previous issue is partially fixed. Let’s pinpoint it exactly.
+
+---
+
+# 🚨 Current Error (New Root Cause)
+
+```text
+ValueError: y_true must be 2D (got shape (3,))
+```
+
+📌 Confirmed here: 
+
+---
+
+# 🧠 What this means
+
+Your evaluation has now moved into:
+
+```python
+compute_multilabel_metrics(...)
+```
+
+👉 This function expects:
+
+```python
+y_true shape = (N, C)   # 2D
+```
+
+BUT you are passing:
+
+```python
+y_true shape = (N,)     # 1D ❌
+```
+
+---
+
+# 🎯 Why this is happening
+
+You have **mixed task types**:
+
+| Task type  | Expected label format |
+| ---------- | --------------------- |
+| multiclass | `(N,)`                |
+| multilabel | `(N, C)`              |
+
+👉 Your pipeline is treating a **multiclass task as multilabel**
+
+---
+
+# ⚠️ Exact Problem
+
+This line in your logs:
+
+```text
+compute_multilabel_metrics
+```
+
+👉 means:
+
+> ❌ Your task is incorrectly routed to **multilabel evaluation**
+
+---
+
+# 🔍 Where the bug is
+
+Inside:
+
+```text
+src/evaluation/evaluation_pipeline.py
+```
+
+You likely have logic like:
+
+```python
+if task_type == "multilabel":
+    compute_multilabel_metrics(...)
+else:
+    compute_multiclass_metrics(...)
+```
+
+👉 But your `task_type` is wrong.
+
+---
+
+# ✅ FIX (CRITICAL)
+
+## 🔧 Step 1 — Find task type mapping
+
+Look for something like:
+
+```python
+task_type = config[task]["type"]
+```
+
+---
+
+## 🔧 Step 2 — Fix task types
+
+For your tasks, it should be:
+
+```python
+TASK_TYPES = {
+    "bias": "multiclass",
+    "ideology": "multiclass",
+    "propaganda": "multiclass",
+    "emotion": "multiclass",
+    "narrative": "multiclass",
+    "narrative_frame": "multiclass"
+}
+```
+
+---
+
+## 🚨 If ANY of them is `"multilabel"` → WRONG
+
+---
+
+# 🔧 Alternative quick fix (safe fallback)
+
+Inside `evaluate_model.py` before calling metrics:
+
+```python
+if y_true.ndim == 1:
+    # force multiclass path
+    return compute_multiclass_metrics(y_true, y_pred)
+```
+
+---
+
+# 💡 Why this suddenly appeared
+
+Because earlier:
+
+* evaluation was crashing earlier ❌
+* now it reached deeper layer ✅
+
+👉 So you’re uncovering the **next bug in chain**
+
+---
+
+# 📊 Your debugging progression (important)
+
+| Stage                | Status            |
+| -------------------- | ----------------- |
+| GPU / model          | ✅ fixed           |
+| predictions          | ✅ working         |
+| logits mismatch      | ✅ fixed           |
+| y_pred shape         | ✅ partially fixed |
+| ❌ task type mismatch | CURRENT ISSUE     |
+
+---
+
+# 🧠 Key Insight
+
+You are now debugging:
+
+> ⚙️ **evaluation configuration (not model)**
+
+---
+
+# 🎯 Final Answer
+
+* ❌ Your evaluator expects multilabel `(N, C)`
+* ❌ You are giving multiclass `(N,)`
+* 👉 Because task type is misconfigured
+
+---
+
+# 🚀 What you should do NOW
+
+1. Go to `evaluation_pipeline.py`
+2. Find task type logic
+3. Change ALL tasks → `"multiclass"`
+4. Run again
+
+---
+
+# 🧪 Expected result after fix
+
+* No crash ✅
+* Metrics computed ✅
+* score > 0 ✅
+
+---
+
+# If you want to finish this cleanly
+
+I can:
+
+* audit your full task config
+* fix evaluation routing permanently
+* unify multiclass vs multilabel handling
+
+Just paste your `evaluation_pipeline.py` or config 👍

@@ -1,0 +1,271 @@
+Good—you shared the actual runtime logs. This makes the problem very clear. Let’s dissect it precisely.
+
+---
+
+# 🚨 Root Problem (Critical)
+
+### ❗ Your model is NOT running at all
+
+From your logs:
+
+> `No checkpoint at ... checkpoint.pt` 
+> `TruthLensPipeline initialised WITHOUT a predictor` 
+
+### 🔴 Impact:
+
+* `predictions = {}` (empty)
+* `metrics score = 0.0`
+* Only **analysis + graph pipeline running**
+* **ML model completely skipped**
+
+---
+
+# 🧠 What’s Actually Happening
+
+Your pipeline flow:
+
+```text
+Input → Analysis → Features → Graph → Aggregation → (Model ❌ skipped)
+```
+
+So your final scores are based ONLY on:
+
+* graph features
+* heuristic aggregation
+
+👉 That’s why:
+
+```text
+predictions keys: []
+```
+
+---
+
+# ⚠️ Secondary Issues
+
+## 1. spaCy vocab mismatch
+
+```text
+EmotionTarget: doc.vocab does not match PhraseMatcher vocab
+```
+
+### Cause:
+
+* Multiple spaCy pipelines loaded differently:
+
+  * one with `disable=()`
+  * one with `disable=('parser',)`
+  * one with `disable=('ner',)`
+
+👉 This creates **different vocab objects**
+
+---
+
+## 2. Feature anomalies
+
+```text
+feature_anomaly_detected
+```
+
+This indicates:
+
+* feature scaling issues
+* missing/NaN features
+* or distribution mismatch
+
+---
+
+# 🔥 Fix Plan (Priority Order)
+
+## ✅ STEP 1 — TRAIN MODEL (MANDATORY)
+
+Your system explicitly tells you:
+
+```text
+Run: python main.py --mode train
+```
+
+### Requirements:
+
+Ensure dataset exists:
+
+```text
+data/
+  train/
+  val/
+  test/
+```
+
+OR unified:
+
+```text
+data/unified_dataset_train.csv
+data/unified_dataset_validation.csv
+data/unified_dataset_test.csv
+```
+
+### Then run:
+
+```bash
+python main.py --mode train
+```
+
+### Expected output:
+
+```text
+saved_models/checkpoint.pt
+```
+
+---
+
+## ✅ STEP 2 — VERIFY CHECKPOINT LOAD
+
+After training:
+
+```bash
+python main.py --mode infer
+```
+
+You should see:
+
+```text
+Predictor initialized ✅
+```
+
+NOT:
+
+```text
+WITHOUT a predictor ❌
+```
+
+---
+
+## ✅ STEP 3 — Fix spaCy Pipeline (Important)
+
+### Problem:
+
+Multiple inconsistent loads
+
+### Fix:
+
+Centralize spaCy loader:
+
+```python
+# src/analysis/spacy_loader.py
+
+@lru_cache(maxsize=1)
+def get_nlp():
+    return spacy.load("en_core_web_sm")
+```
+
+Then reuse everywhere.
+
+---
+
+## ✅ STEP 4 — Fix EmotionTarget Matcher
+
+Ensure matcher uses same vocab:
+
+```python
+matcher = PhraseMatcher(nlp.vocab)
+```
+
+NOT a new vocab.
+
+---
+
+## ✅ STEP 5 — Fix Feature Anomalies
+
+Add validation before aggregation:
+
+```python
+assert not np.isnan(features).any()
+assert not np.isinf(features).any()
+```
+
+Also log:
+
+* min/max
+* distribution
+
+---
+
+## ✅ STEP 6 — Sanity Check Pipeline
+
+After fixes, expected:
+
+```text
+predictions keys: ['bias', 'ideology', 'propaganda', ...]
+```
+
+AND:
+
+```text
+metrics score != 0.0
+```
+
+---
+
+# 🚀 Quick Debug Checklist
+
+Run these immediately:
+
+```bash
+ls saved_models/
+```
+
+If empty → model not trained
+
+---
+
+```bash
+cat config/config.yaml | grep checkpoint
+```
+
+Verify path matches:
+
+```text
+saved_models/checkpoint.pt
+```
+
+---
+
+```bash
+python main.py --mode infer
+```
+
+Check logs for:
+
+* predictor init
+* predictions present
+
+---
+
+# 🔥 Bottom Line
+
+### Your system is NOT broken — it's incomplete
+
+| Component   | Status    |
+| ----------- | --------- |
+| Analysis    | ✅ Working |
+| Graph       | ✅ Working |
+| Aggregation | ✅ Working |
+| Model       | ❌ Missing |
+
+---
+
+# ⚡ Most Important Action
+
+👉 **Run training first**
+
+Everything else is secondary.
+
+---
+
+If you want, I can:
+
+* Audit your `train_roberta.py` for GPU optimization
+* Fix checkpoint saving/loading bugs
+* Or verify your dataset pipeline end-to-end
+
+Just tell me 👍

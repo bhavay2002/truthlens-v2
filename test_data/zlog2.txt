@@ -1,0 +1,465 @@
+2026-04-22 15:43:04 | INFO | __main__ | === TruthLens Multi-Task Training Pipeline ===
+2026-04-22 15:43:04 | INFO | src.utils.seed_utils | Seed set to 42 | deterministic=False
+2026-04-22 15:43:04 | INFO | __main__ | Training device: cuda
+/teamspace/studios/this_studio/Truthlens-Ai/main.py:256: DtypeWarning: Columns (0,5,14,15,16) have mixed types. Specify dtype option on import or set low_memory=False.
+  train_df = pd.read_csv(TRAIN_PATH)
+/teamspace/studios/this_studio/Truthlens-Ai/main.py:257: DtypeWarning: Columns (0,5,14,15,16) have mixed types. Specify dtype option on import or set low_memory=False.
+  val_df = pd.read_csv(VAL_PATH)
+/teamspace/studios/this_studio/Truthlens-Ai/main.py:258: DtypeWarning: Columns (0,5,14,15,16) have mixed types. Specify dtype option on import or set low_memory=False.
+  test_df = pd.read_csv(TEST_PATH)
+2026-04-22 15:43:07 | INFO | __main__ | Dataset loaded — train: 153322  val: 32855  test: 32860
+2026-04-22 15:45:17 | INFO | src.models.encoder.encoder_factory | Creating transformer encoder | model=roberta-base | pooling=cls
+Some weights of RobertaModel were not initialized from the model checkpoint at roberta-base and are newly initialized: ['pooler.dense.bias', 'pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+2026-04-22 15:45:18 | INFO | src.models.base.base_model | Moving model to device: cuda
+2026-04-22 15:45:19 | INFO | src.models.encoder.transformer_encoder | TransformerEncoder initialized | model=roberta-base | pooling=cls | hidden=768
+2026-04-22 15:45:19 | INFO | src.models.heads.classification_head | ClassificationHead initialized | input_dim=768 | num_classes=2
+2026-04-22 15:45:19 | INFO | src.models.heads.classification_head | ClassificationHead initialized | input_dim=768 | num_classes=3
+2026-04-22 15:45:19 | INFO | src.models.heads.classification_head | ClassificationHead initialized | input_dim=768 | num_classes=2
+2026-04-22 15:45:19 | INFO | src.models.heads.multilabel_head | MultiLabelHead initialized | input_dim=768 | num_labels=3
+2026-04-22 15:45:19 | INFO | src.models.heads.multilabel_head | MultiLabelHead initialized | input_dim=768 | num_labels=5
+2026-04-22 15:45:19 | INFO | src.models.heads.multilabel_head | MultiLabelHead initialized | input_dim=768 | num_labels=20
+2026-04-22 15:45:19 | INFO | src.models.multitask.multitask_loss | MultiTaskLoss initialized with tasks: ['bias', 'ideology', 'propaganda', 'narrative', 'narrative_frame', 'emotion']
+2026-04-22 15:45:19 | INFO | src.models.multitask.multitask_truthlens_model | MultiTaskTruthLensModel initialized
+2026-04-22 15:45:19 | INFO | src.training.optimizer_factory | Optimizer=adamw | lr=0.000020 | wd=0.0100 | fused=True
+2026-04-22 15:45:19 | INFO | src.training.scheduler_factory | Scheduler=linear | warmup_steps=3833 | training_steps=38332
+2026-04-22 15:45:22 | INFO | src.models.training.trainer | torch.compile enabled
+2026-04-22 15:45:23 | WARNING | src.models.training.trainer | Checkpoint resume skipped: Checkpoint missing 'model_state_dict'
+2026-04-22 15:45:23 | INFO | src.models.training.trainer | Trainer initialized on device cuda
+2026-04-22 15:45:23 | INFO | __main__ | Starting training
+2026-04-22 15:45:23 | INFO | src.models.training.trainer | Epoch 1/4
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+2026-04-22 15:47:12 | INFO | src.models.training.trainer | step 100 | loss 4.423611
+2026-04-22 15:47:17 | INFO | src.models.training.trainer | step 200 | loss 3.814562
+2026-04-22 15:47:22 | INFO | src.models.training.trainer | step 300 | loss 2.387946
+2026-04-22 15:47:26 | INFO | src.models.training.trainer | step 400 | loss 2.987280
+2026-04-22 15:47:31 | INFO | src.models.training.trainer | step 500 | loss 2.898667
+2026-04-22 15:47:36 | INFO | src.models.training.trainer | step 600 | loss 1.565668
+2026-04-22 15:47:40 | INFO | src.models.training.trainer | step 700 | loss 1.408356
+2026-04-22 15:47:45 | INFO | src.models.training.trainer | step 800 | loss 2.112192
+2026-04-22 15:47:50 | INFO | src.models.training.trainer | step 900 | loss 1.435372
+2026-04-22 15:47:54 | INFO | src.models.training.trainer | step 1000 | loss 1.173584
+2026-04-22 15:47:59 | INFO | src.models.training.trainer | step 1100 | loss 2.422815
+2026-04-22 15:48:04 | INFO | src.models.training.trainer | step 1200 | loss 2.048465
+2026-04-22 15:48:08 | INFO | src.models.training.trainer | step 1300 | loss 1.221238
+2026-04-22 15:48:13 | INFO | src.models.training.trainer | step 1400 | loss 0.868704
+2026-04-22 15:48:17 | INFO | src.models.training.trainer | step 1500 | loss 0.784569
+2026-04-22 15:48:22 | INFO | src.models.training.trainer | step 1600 | loss 0.830996
+2026-04-22 15:48:26 | INFO | src.models.training.trainer | step 1700 | loss 2.313212
+2026-04-22 15:48:31 | INFO | src.models.training.trainer | step 1800 | loss 1.328007
+2026-04-22 15:48:36 | INFO | src.models.training.trainer | step 1900 | loss 1.553386
+2026-04-22 15:48:41 | INFO | src.models.training.trainer | step 2000 | loss 1.175143
+2026-04-22 15:48:46 | INFO | src.models.training.trainer | step 2100 | loss 0.898069
+2026-04-22 15:48:51 | INFO | src.models.training.trainer | step 2200 | loss 1.451444
+2026-04-22 15:48:55 | INFO | src.models.training.trainer | step 2300 | loss 1.254296
+2026-04-22 15:49:00 | INFO | src.models.training.trainer | step 2400 | loss 1.311708
+2026-04-22 15:49:06 | INFO | src.models.training.trainer | step 2500 | loss 0.369449
+2026-04-22 15:49:12 | INFO | src.models.training.trainer | step 2600 | loss 0.807505
+2026-04-22 15:49:17 | INFO | src.models.training.trainer | step 2700 | loss 0.302905
+2026-04-22 15:49:22 | INFO | src.models.training.trainer | step 2800 | loss 0.328088
+2026-04-22 15:49:26 | INFO | src.models.training.trainer | step 2900 | loss 1.741714
+2026-04-22 15:49:31 | INFO | src.models.training.trainer | step 3000 | loss 0.339525
+2026-04-22 15:49:36 | INFO | src.models.training.trainer | step 3100 | loss 0.306110
+2026-04-22 15:49:41 | INFO | src.models.training.trainer | step 3200 | loss 1.195326
+2026-04-22 15:49:46 | INFO | src.models.training.trainer | step 3300 | loss 0.374678
+2026-04-22 15:49:51 | INFO | src.models.training.trainer | step 3400 | loss 0.899533
+2026-04-22 15:49:55 | INFO | src.models.training.trainer | step 3500 | loss 0.934738
+2026-04-22 15:50:00 | INFO | src.models.training.trainer | step 3600 | loss 0.573615
+2026-04-22 15:50:06 | INFO | src.models.training.trainer | step 3700 | loss 1.058917
+2026-04-22 15:50:10 | INFO | src.models.training.trainer | step 3800 | loss 1.044198
+2026-04-22 15:50:15 | INFO | src.models.training.trainer | step 3900 | loss 0.472626
+2026-04-22 15:50:21 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-4000/checkpoint.pt
+2026-04-22 15:50:21 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 4000
+2026-04-22 15:50:23 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-4000
+2026-04-22 15:50:23 | INFO | src.models.training.trainer | step 4000 | loss 1.981066
+2026-04-22 15:50:28 | INFO | src.models.training.trainer | step 4100 | loss 0.215671
+2026-04-22 15:50:33 | INFO | src.models.training.trainer | step 4200 | loss 1.174909
+2026-04-22 15:50:38 | INFO | src.models.training.trainer | step 4300 | loss 0.222576
+2026-04-22 15:50:43 | INFO | src.models.training.trainer | step 4400 | loss 1.154631
+2026-04-22 15:50:48 | INFO | src.models.training.trainer | step 4500 | loss 1.349692
+2026-04-22 15:50:53 | INFO | src.models.training.trainer | step 4600 | loss 0.482838
+2026-04-22 15:50:57 | INFO | src.models.training.trainer | step 4700 | loss 0.203334
+2026-04-22 15:51:03 | INFO | src.models.training.trainer | step 4800 | loss 1.721083
+2026-04-22 15:51:07 | INFO | src.models.training.trainer | step 4900 | loss 1.131873
+2026-04-22 15:51:12 | INFO | src.models.training.trainer | step 5000 | loss 1.273592
+2026-04-22 15:51:17 | INFO | src.models.training.trainer | step 5100 | loss 2.097656
+2026-04-22 15:51:23 | INFO | src.models.training.trainer | step 5200 | loss 0.227004
+2026-04-22 15:51:27 | INFO | src.models.training.trainer | step 5300 | loss 0.159932
+2026-04-22 15:51:33 | INFO | src.models.training.trainer | step 5400 | loss 0.949656
+2026-04-22 15:51:37 | INFO | src.models.training.trainer | step 5500 | loss 0.064692
+2026-04-22 15:51:42 | INFO | src.models.training.trainer | step 5600 | loss 0.960509
+2026-04-22 15:51:47 | INFO | src.models.training.trainer | step 5700 | loss 0.213121
+2026-04-22 15:51:52 | INFO | src.models.training.trainer | step 5800 | loss 0.255634
+2026-04-22 15:51:57 | INFO | src.models.training.trainer | step 5900 | loss 0.749780
+2026-04-22 15:52:02 | INFO | src.models.training.trainer | step 6000 | loss 3.787051
+2026-04-22 15:52:07 | INFO | src.models.training.trainer | step 6100 | loss 0.529070
+2026-04-22 15:52:12 | INFO | src.models.training.trainer | step 6200 | loss 0.047273
+2026-04-22 15:52:17 | INFO | src.models.training.trainer | step 6300 | loss 0.776190
+2026-04-22 15:52:22 | INFO | src.models.training.trainer | step 6400 | loss 0.859844
+2026-04-22 15:52:27 | INFO | src.models.training.trainer | step 6500 | loss 0.850602
+2026-04-22 15:52:32 | INFO | src.models.training.trainer | step 6600 | loss 0.229550
+2026-04-22 15:52:37 | INFO | src.models.training.trainer | step 6700 | loss 0.876349
+2026-04-22 15:52:43 | INFO | src.models.training.trainer | step 6800 | loss 4.084461
+2026-04-22 15:52:48 | INFO | src.models.training.trainer | step 6900 | loss 0.495132
+2026-04-22 15:52:53 | INFO | src.models.training.trainer | step 7000 | loss 0.091335
+2026-04-22 15:52:57 | INFO | src.models.training.trainer | step 7100 | loss 0.038098
+2026-04-22 15:53:02 | INFO | src.models.training.trainer | step 7200 | loss 0.197719
+2026-04-22 15:53:07 | INFO | src.models.training.trainer | step 7300 | loss 0.186069
+2026-04-22 15:53:12 | INFO | src.models.training.trainer | step 7400 | loss 0.028766
+2026-04-22 15:53:17 | INFO | src.models.training.trainer | step 7500 | loss 0.026186
+2026-04-22 15:53:22 | INFO | src.models.training.trainer | step 7600 | loss 0.036885
+2026-04-22 15:53:27 | INFO | src.models.training.trainer | step 7700 | loss 0.311064
+2026-04-22 15:53:32 | INFO | src.models.training.trainer | step 7800 | loss 0.956917
+2026-04-22 15:53:37 | INFO | src.models.training.trainer | step 7900 | loss 1.064031
+2026-04-22 15:53:42 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-8000/checkpoint.pt
+2026-04-22 15:53:42 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 8000
+2026-04-22 15:53:44 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-8000
+2026-04-22 15:53:44 | INFO | src.models.training.trainer | step 8000 | loss 0.033706
+2026-04-22 15:53:49 | INFO | src.models.training.trainer | step 8100 | loss 0.762937
+2026-04-22 15:53:54 | INFO | src.models.training.trainer | step 8200 | loss 0.967460
+2026-04-22 15:53:59 | INFO | src.models.training.trainer | step 8300 | loss 0.769814
+2026-04-22 15:54:04 | INFO | src.models.training.trainer | step 8400 | loss 0.032741
+2026-04-22 15:54:10 | INFO | src.models.training.trainer | step 8500 | loss 0.592787
+2026-04-22 15:54:15 | INFO | src.models.training.trainer | step 8600 | loss 0.500644
+2026-04-22 15:54:20 | INFO | src.models.training.trainer | step 8700 | loss 0.204241
+2026-04-22 15:54:25 | INFO | src.models.training.trainer | step 8800 | loss 0.816517
+2026-04-22 15:54:29 | INFO | src.models.training.trainer | step 8900 | loss 0.806837
+2026-04-22 15:54:34 | INFO | src.models.training.trainer | step 9000 | loss 1.017834
+2026-04-22 15:54:40 | INFO | src.models.training.trainer | step 9100 | loss 0.073532
+2026-04-22 15:54:45 | INFO | src.models.training.trainer | step 9200 | loss 0.214667
+2026-04-22 15:54:49 | INFO | src.models.training.trainer | step 9300 | loss 1.107054
+2026-04-22 15:54:54 | INFO | src.models.training.trainer | step 9400 | loss 0.213240
+2026-04-22 15:54:59 | INFO | src.models.training.trainer | step 9500 | loss 1.156797
+2026-04-22 15:56:13 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-9583/checkpoint.pt
+2026-04-22 15:56:15 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-9583
+2026-04-22 15:56:15 | INFO | src.models.training.trainer | Epoch 2/4
+2026-04-22 15:56:19 | INFO | src.models.training.trainer | step 100 | loss 0.348233
+2026-04-22 15:56:23 | INFO | src.models.training.trainer | step 200 | loss 0.197095
+2026-04-22 15:56:27 | INFO | src.models.training.trainer | step 300 | loss 0.191784
+2026-04-22 15:56:31 | INFO | src.models.training.trainer | step 400 | loss 0.802634
+2026-04-22 15:56:36 | INFO | src.models.training.trainer | step 500 | loss 0.362308
+2026-04-22 15:56:40 | INFO | src.models.training.trainer | step 600 | loss 0.017211
+2026-04-22 15:56:45 | INFO | src.models.training.trainer | step 700 | loss 0.214117
+2026-04-22 15:56:49 | INFO | src.models.training.trainer | step 800 | loss 0.211453
+2026-04-22 15:56:54 | INFO | src.models.training.trainer | step 900 | loss 0.198175
+2026-04-22 15:56:58 | INFO | src.models.training.trainer | step 1000 | loss 0.204963
+2026-04-22 15:57:03 | INFO | src.models.training.trainer | step 1100 | loss 0.012302
+2026-04-22 15:57:07 | INFO | src.models.training.trainer | step 1200 | loss 0.596753
+2026-04-22 15:57:11 | INFO | src.models.training.trainer | step 1300 | loss 0.218856
+2026-04-22 15:57:16 | INFO | src.models.training.trainer | step 1400 | loss 1.506949
+2026-04-22 15:57:20 | INFO | src.models.training.trainer | step 1500 | loss 2.049273
+2026-04-22 15:57:24 | INFO | src.models.training.trainer | step 1600 | loss 0.468252
+2026-04-22 15:57:28 | INFO | src.models.training.trainer | step 1700 | loss 0.644802
+2026-04-22 15:57:32 | INFO | src.models.training.trainer | step 1800 | loss 0.660281
+2026-04-22 15:57:37 | INFO | src.models.training.trainer | step 1900 | loss 0.508740
+2026-04-22 15:57:41 | INFO | src.models.training.trainer | step 2000 | loss 0.697664
+2026-04-22 15:57:47 | INFO | src.models.training.trainer | step 2100 | loss 0.791988
+2026-04-22 15:57:51 | INFO | src.models.training.trainer | step 2200 | loss 0.398344
+2026-04-22 15:57:56 | INFO | src.models.training.trainer | step 2300 | loss 0.095865
+2026-04-22 15:58:01 | INFO | src.models.training.trainer | step 2400 | loss 0.017889
+2026-04-22 15:58:02 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-12000/checkpoint.pt
+2026-04-22 15:58:02 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 12000
+2026-04-22 15:58:04 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-12000
+2026-04-22 15:58:07 | INFO | src.models.training.trainer | step 2500 | loss 0.250739
+2026-04-22 15:58:12 | INFO | src.models.training.trainer | step 2600 | loss 0.273367
+2026-04-22 15:58:16 | INFO | src.models.training.trainer | step 2700 | loss 0.845242
+2026-04-22 15:58:21 | INFO | src.models.training.trainer | step 2800 | loss 0.365276
+2026-04-22 15:58:25 | INFO | src.models.training.trainer | step 2900 | loss 1.048986
+2026-04-22 15:58:29 | INFO | src.models.training.trainer | step 3000 | loss 0.694450
+2026-04-22 15:58:34 | INFO | src.models.training.trainer | step 3100 | loss 0.509719
+2026-04-22 15:58:38 | INFO | src.models.training.trainer | step 3200 | loss 0.007667
+2026-04-22 15:58:42 | INFO | src.models.training.trainer | step 3300 | loss 0.007635
+2026-04-22 15:58:47 | INFO | src.models.training.trainer | step 3400 | loss 0.415936
+2026-04-22 15:58:51 | INFO | src.models.training.trainer | step 3500 | loss 1.392104
+2026-04-22 15:58:55 | INFO | src.models.training.trainer | step 3600 | loss 0.007107
+2026-04-22 15:59:00 | INFO | src.models.training.trainer | step 3700 | loss 0.234487
+2026-04-22 15:59:04 | INFO | src.models.training.trainer | step 3800 | loss 1.277830
+2026-04-22 15:59:08 | INFO | src.models.training.trainer | step 3900 | loss 0.197442
+2026-04-22 15:59:12 | INFO | src.models.training.trainer | step 4000 | loss 0.006388
+2026-04-22 15:59:16 | INFO | src.models.training.trainer | step 4100 | loss 0.434151
+2026-04-22 15:59:20 | INFO | src.models.training.trainer | step 4200 | loss 0.161440
+2026-04-22 15:59:24 | INFO | src.models.training.trainer | step 4300 | loss 0.905202
+2026-04-22 15:59:29 | INFO | src.models.training.trainer | step 4400 | loss 0.148739
+2026-04-22 15:59:32 | INFO | src.models.training.trainer | step 4500 | loss 0.989151
+2026-04-22 15:59:37 | INFO | src.models.training.trainer | step 4600 | loss 2.474142
+2026-04-22 15:59:41 | INFO | src.models.training.trainer | step 4700 | loss 0.146294
+2026-04-22 15:59:46 | INFO | src.models.training.trainer | step 4800 | loss 0.273682
+2026-04-22 15:59:50 | INFO | src.models.training.trainer | step 4900 | loss 0.456666
+2026-04-22 15:59:54 | INFO | src.models.training.trainer | step 5000 | loss 0.184684
+2026-04-22 15:59:59 | INFO | src.models.training.trainer | step 5100 | loss 0.177762
+2026-04-22 16:00:03 | INFO | src.models.training.trainer | step 5200 | loss 0.664690
+2026-04-22 16:00:08 | INFO | src.models.training.trainer | step 5300 | loss 0.571404
+2026-04-22 16:00:12 | INFO | src.models.training.trainer | step 5400 | loss 0.006851
+2026-04-22 16:00:17 | INFO | src.models.training.trainer | step 5500 | loss 0.744527
+2026-04-22 16:00:21 | INFO | src.models.training.trainer | step 5600 | loss 0.861644
+2026-04-22 16:00:25 | INFO | src.models.training.trainer | step 5700 | loss 0.562409
+2026-04-22 16:00:30 | INFO | src.models.training.trainer | step 5800 | loss 0.905986
+2026-04-22 16:00:34 | INFO | src.models.training.trainer | step 5900 | loss 0.319958
+2026-04-22 16:00:38 | INFO | src.models.training.trainer | step 6000 | loss 0.186906
+2026-04-22 16:00:42 | INFO | src.models.training.trainer | step 6100 | loss 0.858484
+2026-04-22 16:00:47 | INFO | src.models.training.trainer | step 6200 | loss 0.483955
+2026-04-22 16:00:51 | INFO | src.models.training.trainer | step 6300 | loss 0.006662
+2026-04-22 16:00:58 | INFO | src.models.training.trainer | step 6400 | loss 0.441264
+2026-04-22 16:00:59 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-16000/checkpoint.pt
+2026-04-22 16:00:59 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 16000
+2026-04-22 16:01:01 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-16000
+2026-04-22 16:01:05 | INFO | src.models.training.trainer | step 6500 | loss 0.572519
+2026-04-22 16:01:09 | INFO | src.models.training.trainer | step 6600 | loss 0.237106
+2026-04-22 16:01:13 | INFO | src.models.training.trainer | step 6700 | loss 0.004143
+2026-04-22 16:01:18 | INFO | src.models.training.trainer | step 6800 | loss 0.379326
+2026-04-22 16:01:22 | INFO | src.models.training.trainer | step 6900 | loss 0.004381
+2026-04-22 16:01:26 | INFO | src.models.training.trainer | step 7000 | loss 0.655825
+2026-04-22 16:01:31 | INFO | src.models.training.trainer | step 7100 | loss 0.297871
+2026-04-22 16:01:35 | INFO | src.models.training.trainer | step 7200 | loss 0.005650
+2026-04-22 16:01:40 | INFO | src.models.training.trainer | step 7300 | loss 0.115950
+2026-04-22 16:01:44 | INFO | src.models.training.trainer | step 7400 | loss 1.020519
+2026-04-22 16:01:48 | INFO | src.models.training.trainer | step 7500 | loss 0.343304
+2026-04-22 16:01:52 | INFO | src.models.training.trainer | step 7600 | loss 0.179365
+2026-04-22 16:01:56 | INFO | src.models.training.trainer | step 7700 | loss 0.721662
+2026-04-22 16:02:00 | INFO | src.models.training.trainer | step 7800 | loss 0.174502
+2026-04-22 16:02:05 | INFO | src.models.training.trainer | step 7900 | loss 0.138387
+2026-04-22 16:02:09 | INFO | src.models.training.trainer | step 8000 | loss 0.173304
+2026-04-22 16:02:14 | INFO | src.models.training.trainer | step 8100 | loss 0.708953
+2026-04-22 16:02:18 | INFO | src.models.training.trainer | step 8200 | loss 0.003787
+2026-04-22 16:02:22 | INFO | src.models.training.trainer | step 8300 | loss 0.004154
+2026-04-22 16:02:26 | INFO | src.models.training.trainer | step 8400 | loss 0.313600
+2026-04-22 16:02:30 | INFO | src.models.training.trainer | step 8500 | loss 0.371079
+2026-04-22 16:02:35 | INFO | src.models.training.trainer | step 8600 | loss 0.881572
+2026-04-22 16:02:39 | INFO | src.models.training.trainer | step 8700 | loss 0.230206
+2026-04-22 16:02:43 | INFO | src.models.training.trainer | step 8800 | loss 0.265495
+2026-04-22 16:02:47 | INFO | src.models.training.trainer | step 8900 | loss 0.144359
+2026-04-22 16:02:51 | INFO | src.models.training.trainer | step 9000 | loss 0.254984
+2026-04-22 16:02:56 | INFO | src.models.training.trainer | step 9100 | loss 0.288380
+2026-04-22 16:03:00 | INFO | src.models.training.trainer | step 9200 | loss 0.294045
+2026-04-22 16:03:04 | INFO | src.models.training.trainer | step 9300 | loss 0.572260
+2026-04-22 16:03:08 | INFO | src.models.training.trainer | step 9400 | loss 0.901386
+2026-04-22 16:03:12 | INFO | src.models.training.trainer | step 9500 | loss 0.520963
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+2026-04-22 16:04:13 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-19166/checkpoint.pt
+2026-04-22 16:04:14 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-1000000001/checkpoint.pt
+2026-04-22 16:04:16 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-19166
+2026-04-22 16:04:16 | INFO | src.models.training.trainer | Epoch 3/4
+2026-04-22 16:04:21 | INFO | src.models.training.trainer | step 100 | loss 0.145453
+2026-04-22 16:04:24 | INFO | src.models.training.trainer | step 200 | loss 0.491477
+2026-04-22 16:04:29 | INFO | src.models.training.trainer | step 300 | loss 0.552018
+2026-04-22 16:04:33 | INFO | src.models.training.trainer | step 400 | loss 0.151495
+2026-04-22 16:04:37 | INFO | src.models.training.trainer | step 500 | loss 0.002868
+2026-04-22 16:04:41 | INFO | src.models.training.trainer | step 600 | loss 0.269976
+2026-04-22 16:04:46 | INFO | src.models.training.trainer | step 700 | loss 0.004538
+2026-04-22 16:04:50 | INFO | src.models.training.trainer | step 800 | loss 0.113420
+2026-04-22 16:04:52 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-20000/checkpoint.pt
+2026-04-22 16:04:52 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 20000
+2026-04-22 16:04:54 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-20000
+2026-04-22 16:04:56 | INFO | src.models.training.trainer | step 900 | loss 2.264419
+2026-04-22 16:05:00 | INFO | src.models.training.trainer | step 1000 | loss 0.230328
+2026-04-22 16:05:04 | INFO | src.models.training.trainer | step 1100 | loss 1.063537
+2026-04-22 16:05:08 | INFO | src.models.training.trainer | step 1200 | loss 0.380599
+2026-04-22 16:05:14 | INFO | src.models.training.trainer | step 1300 | loss 0.002580
+2026-04-22 16:05:19 | INFO | src.models.training.trainer | step 1400 | loss 0.202152
+2026-04-22 16:05:22 | INFO | src.models.training.trainer | step 1500 | loss 0.233358
+2026-04-22 16:05:27 | INFO | src.models.training.trainer | step 1600 | loss 0.179017
+2026-04-22 16:05:31 | INFO | src.models.training.trainer | step 1700 | loss 0.002712
+2026-04-22 16:05:35 | INFO | src.models.training.trainer | step 1800 | loss 0.160404
+2026-04-22 16:05:39 | INFO | src.models.training.trainer | step 1900 | loss 0.146566
+2026-04-22 16:05:43 | INFO | src.models.training.trainer | step 2000 | loss 0.267772
+2026-04-22 16:05:47 | INFO | src.models.training.trainer | step 2100 | loss 1.181940
+2026-04-22 16:05:51 | INFO | src.models.training.trainer | step 2200 | loss 0.159943
+2026-04-22 16:05:55 | INFO | src.models.training.trainer | step 2300 | loss 0.169400
+2026-04-22 16:05:59 | INFO | src.models.training.trainer | step 2400 | loss 0.021231
+2026-04-22 16:06:04 | INFO | src.models.training.trainer | step 2500 | loss 0.120239
+2026-04-22 16:06:08 | INFO | src.models.training.trainer | step 2600 | loss 0.149353
+2026-04-22 16:06:13 | INFO | src.models.training.trainer | step 2700 | loss 0.101833
+2026-04-22 16:06:17 | INFO | src.models.training.trainer | step 2800 | loss 0.645407
+2026-04-22 16:06:22 | INFO | src.models.training.trainer | step 2900 | loss 0.142299
+2026-04-22 16:06:26 | INFO | src.models.training.trainer | step 3000 | loss 0.138068
+2026-04-22 16:06:31 | INFO | src.models.training.trainer | step 3100 | loss 0.215599
+2026-04-22 16:06:35 | INFO | src.models.training.trainer | step 3200 | loss 0.002579
+2026-04-22 16:06:39 | INFO | src.models.training.trainer | step 3300 | loss 0.002108
+2026-04-22 16:06:43 | INFO | src.models.training.trainer | step 3400 | loss 0.192615
+2026-04-22 16:06:47 | INFO | src.models.training.trainer | step 3500 | loss 0.160129
+2026-04-22 16:06:51 | INFO | src.models.training.trainer | step 3600 | loss 0.141786
+2026-04-22 16:06:55 | INFO | src.models.training.trainer | step 3700 | loss 0.834165
+2026-04-22 16:07:00 | INFO | src.models.training.trainer | step 3800 | loss 0.252024
+2026-04-22 16:07:04 | INFO | src.models.training.trainer | step 3900 | loss 0.001935
+2026-04-22 16:07:08 | INFO | src.models.training.trainer | step 4000 | loss 0.178599
+2026-04-22 16:07:13 | INFO | src.models.training.trainer | step 4100 | loss 0.345204
+2026-04-22 16:07:17 | INFO | src.models.training.trainer | step 4200 | loss 0.267422
+2026-04-22 16:07:21 | INFO | src.models.training.trainer | step 4300 | loss 0.135733
+2026-04-22 16:07:26 | INFO | src.models.training.trainer | step 4400 | loss 0.149963
+2026-04-22 16:07:30 | INFO | src.models.training.trainer | step 4500 | loss 0.410231
+2026-04-22 16:07:34 | INFO | src.models.training.trainer | step 4600 | loss 0.001876
+2026-04-22 16:07:38 | INFO | src.models.training.trainer | step 4700 | loss 0.145499
+2026-04-22 16:07:42 | INFO | src.models.training.trainer | step 4800 | loss 0.324900
+2026-04-22 16:07:44 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-24000/checkpoint.pt
+2026-04-22 16:07:44 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 24000
+2026-04-22 16:07:46 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-24000
+2026-04-22 16:07:50 | INFO | src.models.training.trainer | step 4900 | loss 0.360631
+2026-04-22 16:07:53 | INFO | src.models.training.trainer | step 5000 | loss 0.044300
+2026-04-22 16:07:57 | INFO | src.models.training.trainer | step 5100 | loss 0.157469
+2026-04-22 16:08:02 | INFO | src.models.training.trainer | step 5200 | loss 0.210027
+2026-04-22 16:08:06 | INFO | src.models.training.trainer | step 5300 | loss 0.648116
+2026-04-22 16:08:11 | INFO | src.models.training.trainer | step 5400 | loss 0.170606
+2026-04-22 16:08:15 | INFO | src.models.training.trainer | step 5500 | loss 0.675463
+2026-04-22 16:08:19 | INFO | src.models.training.trainer | step 5600 | loss 0.001473
+2026-04-22 16:08:25 | INFO | src.models.training.trainer | step 5700 | loss 0.190395
+2026-04-22 16:08:29 | INFO | src.models.training.trainer | step 5800 | loss 0.187923
+2026-04-22 16:08:33 | INFO | src.models.training.trainer | step 5900 | loss 0.166952
+2026-04-22 16:08:37 | INFO | src.models.training.trainer | step 6000 | loss 0.017426
+2026-04-22 16:08:42 | INFO | src.models.training.trainer | step 6100 | loss 0.083406
+2026-04-22 16:08:46 | INFO | src.models.training.trainer | step 6200 | loss 0.282280
+2026-04-22 16:08:51 | INFO | src.models.training.trainer | step 6300 | loss 0.240280
+2026-04-22 16:08:55 | INFO | src.models.training.trainer | step 6400 | loss 0.001494
+2026-04-22 16:08:59 | INFO | src.models.training.trainer | step 6500 | loss 0.374595
+2026-04-22 16:09:04 | INFO | src.models.training.trainer | step 6600 | loss 0.078895
+2026-04-22 16:09:08 | INFO | src.models.training.trainer | step 6700 | loss 0.228898
+2026-04-22 16:09:12 | INFO | src.models.training.trainer | step 6800 | loss 0.153000
+2026-04-22 16:09:17 | INFO | src.models.training.trainer | step 6900 | loss 0.001570
+2026-04-22 16:09:21 | INFO | src.models.training.trainer | step 7000 | loss 0.277627
+2026-04-22 16:09:25 | INFO | src.models.training.trainer | step 7100 | loss 0.578575
+2026-04-22 16:09:29 | INFO | src.models.training.trainer | step 7200 | loss 0.136409
+2026-04-22 16:09:33 | INFO | src.models.training.trainer | step 7300 | loss 0.133185
+2026-04-22 16:09:37 | INFO | src.models.training.trainer | step 7400 | loss 1.492048
+2026-04-22 16:09:41 | INFO | src.models.training.trainer | step 7500 | loss 0.268960
+2026-04-22 16:09:46 | INFO | src.models.training.trainer | step 7600 | loss 0.687393
+2026-04-22 16:09:50 | INFO | src.models.training.trainer | step 7700 | loss 0.034816
+2026-04-22 16:09:54 | INFO | src.models.training.trainer | step 7800 | loss 0.613918
+2026-04-22 16:09:59 | INFO | src.models.training.trainer | step 7900 | loss 0.099030
+2026-04-22 16:10:03 | INFO | src.models.training.trainer | step 8000 | loss 1.021545
+2026-04-22 16:10:08 | INFO | src.models.training.trainer | step 8100 | loss 0.249468
+2026-04-22 16:10:12 | INFO | src.models.training.trainer | step 8200 | loss 0.001639
+2026-04-22 16:10:16 | INFO | src.models.training.trainer | step 8300 | loss 0.034985
+2026-04-22 16:10:20 | INFO | src.models.training.trainer | step 8400 | loss 0.875564
+2026-04-22 16:10:25 | INFO | src.models.training.trainer | step 8500 | loss 0.001877
+2026-04-22 16:10:28 | INFO | src.models.training.trainer | step 8600 | loss 0.073246
+2026-04-22 16:10:32 | INFO | src.models.training.trainer | step 8700 | loss 0.116684
+2026-04-22 16:10:36 | INFO | src.models.training.trainer | step 8800 | loss 0.021029
+2026-04-22 16:10:38 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-28000/checkpoint.pt
+2026-04-22 16:10:38 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 28000
+2026-04-22 16:10:40 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-28000
+2026-04-22 16:10:43 | INFO | src.models.training.trainer | step 8900 | loss 1.414413
+2026-04-22 16:10:47 | INFO | src.models.training.trainer | step 9000 | loss 0.001679
+2026-04-22 16:10:52 | INFO | src.models.training.trainer | step 9100 | loss 0.261876
+2026-04-22 16:10:56 | INFO | src.models.training.trainer | step 9200 | loss 0.001405
+2026-04-22 16:11:00 | INFO | src.models.training.trainer | step 9300 | loss 0.001593
+2026-04-22 16:11:04 | INFO | src.models.training.trainer | step 9400 | loss 0.152101
+2026-04-22 16:11:09 | INFO | src.models.training.trainer | step 9500 | loss 0.049226
+2026-04-22 16:11:12 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-28749/checkpoint.pt
+2026-04-22 16:11:14 | INFO | src.models.checkpointing.checkpoint_manager | Deleted checkpoint: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-28749
+2026-04-22 16:11:14 | INFO | src.models.training.trainer | Epoch 4/4
+2026-04-22 16:11:19 | INFO | src.models.training.trainer | step 100 | loss 0.014798
+2026-04-22 16:11:23 | INFO | src.models.training.trainer | step 200 | loss 2.508415
+2026-04-22 16:11:27 | INFO | src.models.training.trainer | step 300 | loss 0.194557
+2026-04-22 16:11:33 | INFO | src.models.training.trainer | step 400 | loss 0.134372
+2026-04-22 16:11:37 | INFO | src.models.training.trainer | step 500 | loss 0.352141
+2026-04-22 16:11:41 | INFO | src.models.training.trainer | step 600 | loss 0.106649
+2026-04-22 16:11:45 | INFO | src.models.training.trainer | step 700 | loss 0.283423
+2026-04-22 16:11:49 | INFO | src.models.training.trainer | step 800 | loss 0.318434
+2026-04-22 16:11:54 | INFO | src.models.training.trainer | step 900 | loss 0.178989
+2026-04-22 16:11:58 | INFO | src.models.training.trainer | step 1000 | loss 0.744336
+2026-04-22 16:12:02 | INFO | src.models.training.trainer | step 1100 | loss 0.890104
+2026-04-22 16:12:06 | INFO | src.models.training.trainer | step 1200 | loss 0.001309
+2026-04-22 16:12:10 | INFO | src.models.training.trainer | step 1300 | loss 0.111362
+2026-04-22 16:12:15 | INFO | src.models.training.trainer | step 1400 | loss 0.071554
+2026-04-22 16:12:19 | INFO | src.models.training.trainer | step 1500 | loss 0.277971
+2026-04-22 16:12:23 | INFO | src.models.training.trainer | step 1600 | loss 0.368087
+2026-04-22 16:12:27 | INFO | src.models.training.trainer | step 1700 | loss 0.319170
+2026-04-22 16:12:32 | INFO | src.models.training.trainer | step 1800 | loss 0.001201
+2026-04-22 16:12:36 | INFO | src.models.training.trainer | step 1900 | loss 0.001184
+2026-04-22 16:12:41 | INFO | src.models.training.trainer | step 2000 | loss 0.899141
+2026-04-22 16:12:45 | INFO | src.models.training.trainer | step 2100 | loss 0.304526
+2026-04-22 16:12:49 | INFO | src.models.training.trainer | step 2200 | loss 0.022246
+2026-04-22 16:12:54 | INFO | src.models.training.trainer | step 2300 | loss 0.030892
+2026-04-22 16:12:58 | INFO | src.models.training.trainer | step 2400 | loss 0.086344
+2026-04-22 16:13:02 | INFO | src.models.training.trainer | step 2500 | loss 0.200855
+2026-04-22 16:13:07 | INFO | src.models.training.trainer | step 2600 | loss 0.001195
+2026-04-22 16:13:11 | INFO | src.models.training.trainer | step 2700 | loss 0.362575
+2026-04-22 16:13:16 | INFO | src.models.training.trainer | step 2800 | loss 0.207232
+2026-04-22 16:13:20 | INFO | src.models.training.trainer | step 2900 | loss 0.317577
+2026-04-22 16:13:24 | INFO | src.models.training.trainer | step 3000 | loss 0.097089
+2026-04-22 16:13:29 | INFO | src.models.training.trainer | step 3100 | loss 0.108656
+2026-04-22 16:13:33 | INFO | src.models.training.trainer | step 3200 | loss 0.001230
+2026-04-22 16:13:35 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-32000/checkpoint.pt
+2026-04-22 16:13:35 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 32000
+2026-04-22 16:13:43 | INFO | src.models.training.trainer | step 3300 | loss 0.291647
+2026-04-22 16:13:48 | INFO | src.models.training.trainer | step 3400 | loss 1.093084
+2026-04-22 16:13:52 | INFO | src.models.training.trainer | step 3500 | loss 1.437254
+2026-04-22 16:13:56 | INFO | src.models.training.trainer | step 3600 | loss 0.527778
+2026-04-22 16:14:01 | INFO | src.models.training.trainer | step 3700 | loss 0.207628
+2026-04-22 16:14:05 | INFO | src.models.training.trainer | step 3800 | loss 0.421664
+2026-04-22 16:14:10 | INFO | src.models.training.trainer | step 3900 | loss 0.060441
+2026-04-22 16:14:14 | INFO | src.models.training.trainer | step 4000 | loss 1.046257
+2026-04-22 16:14:19 | INFO | src.models.training.trainer | step 4100 | loss 0.224619
+2026-04-22 16:14:23 | INFO | src.models.training.trainer | step 4200 | loss 0.117969
+2026-04-22 16:14:27 | INFO | src.models.training.trainer | step 4300 | loss 0.056543
+2026-04-22 16:14:32 | INFO | src.models.training.trainer | step 4400 | loss 0.001059
+2026-04-22 16:14:36 | INFO | src.models.training.trainer | step 4500 | loss 1.437832
+2026-04-22 16:14:40 | INFO | src.models.training.trainer | step 4600 | loss 0.124087
+2026-04-22 16:14:46 | INFO | src.models.training.trainer | step 4700 | loss 0.266203
+2026-04-22 16:14:51 | INFO | src.models.training.trainer | step 4800 | loss 0.004845
+2026-04-22 16:14:55 | INFO | src.models.training.trainer | step 4900 | loss 0.001187
+2026-04-22 16:14:59 | INFO | src.models.training.trainer | step 5000 | loss 0.007565
+2026-04-22 16:15:03 | INFO | src.models.training.trainer | step 5100 | loss 0.130938
+2026-04-22 16:15:07 | INFO | src.models.training.trainer | step 5200 | loss 0.307805
+2026-04-22 16:15:11 | INFO | src.models.training.trainer | step 5300 | loss 0.275527
+2026-04-22 16:15:15 | INFO | src.models.training.trainer | step 5400 | loss 0.170215
+2026-04-22 16:15:19 | INFO | src.models.training.trainer | step 5500 | loss 0.000922
+2026-04-22 16:15:23 | INFO | src.models.training.trainer | step 5600 | loss 0.030659
+2026-04-22 16:15:28 | INFO | src.models.training.trainer | step 5700 | loss 0.100423
+2026-04-22 16:15:32 | INFO | src.models.training.trainer | step 5800 | loss 0.135655
+2026-04-22 16:15:36 | INFO | src.models.training.trainer | step 5900 | loss 0.619778
+2026-04-22 16:15:40 | INFO | src.models.training.trainer | step 6000 | loss 0.070954
+2026-04-22 16:15:45 | INFO | src.models.training.trainer | step 6100 | loss 0.133011
+2026-04-22 16:15:49 | INFO | src.models.training.trainer | step 6200 | loss 0.257965
+2026-04-22 16:15:54 | INFO | src.models.training.trainer | step 6300 | loss 0.113399
+2026-04-22 16:15:58 | INFO | src.models.training.trainer | step 6400 | loss 0.127578
+2026-04-22 16:16:02 | INFO | src.models.training.trainer | step 6500 | loss 0.048488
+2026-04-22 16:16:07 | INFO | src.models.training.trainer | step 6600 | loss 0.030440
+2026-04-22 16:16:11 | INFO | src.models.training.trainer | step 6700 | loss 0.587482
+2026-04-22 16:16:15 | INFO | src.models.training.trainer | step 6800 | loss 0.335872
+2026-04-22 16:16:20 | INFO | src.models.training.trainer | step 6900 | loss 0.000881
+2026-04-22 16:16:24 | INFO | src.models.training.trainer | step 7000 | loss 0.176721
+2026-04-22 16:16:28 | INFO | src.models.training.trainer | step 7100 | loss 0.331358
+2026-04-22 16:16:32 | INFO | src.models.training.trainer | step 7200 | loss 1.090725
+2026-04-22 16:16:34 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-36000/checkpoint.pt
+2026-04-22 16:16:34 | INFO | src.models.training.trainer | [Checkpoint] Saved at step 36000
+2026-04-22 16:16:41 | INFO | src.models.training.trainer | step 7300 | loss 0.234530
+2026-04-22 16:16:46 | INFO | src.models.training.trainer | step 7400 | loss 0.078484
+2026-04-22 16:16:50 | INFO | src.models.training.trainer | step 7500 | loss 0.589012
+2026-04-22 16:16:54 | INFO | src.models.training.trainer | step 7600 | loss 0.017192
+2026-04-22 16:16:59 | INFO | src.models.training.trainer | step 7700 | loss 0.241247
+2026-04-22 16:17:04 | INFO | src.models.training.trainer | step 7800 | loss 0.021001
+2026-04-22 16:17:08 | INFO | src.models.training.trainer | step 7900 | loss 0.141118
+2026-04-22 16:17:12 | INFO | src.models.training.trainer | step 8000 | loss 0.103671
+2026-04-22 16:17:16 | INFO | src.models.training.trainer | step 8100 | loss 0.124897
+2026-04-22 16:17:21 | INFO | src.models.training.trainer | step 8200 | loss 0.089807
+2026-04-22 16:17:25 | INFO | src.models.training.trainer | step 8300 | loss 0.289334
+2026-04-22 16:17:29 | INFO | src.models.training.trainer | step 8400 | loss 0.132741
+2026-04-22 16:17:33 | INFO | src.models.training.trainer | step 8500 | loss 0.055642
+2026-04-22 16:17:37 | INFO | src.models.training.trainer | step 8600 | loss 0.001109
+2026-04-22 16:17:41 | INFO | src.models.training.trainer | step 8700 | loss 0.117259
+2026-04-22 16:17:45 | INFO | src.models.training.trainer | step 8800 | loss 0.126666
+2026-04-22 16:17:50 | INFO | src.models.training.trainer | step 8900 | loss 0.134361
+2026-04-22 16:17:55 | INFO | src.models.training.trainer | step 9000 | loss 0.147790
+2026-04-22 16:18:00 | INFO | src.models.training.trainer | step 9100 | loss 0.387800
+2026-04-22 16:18:04 | INFO | src.models.training.trainer | step 9200 | loss 0.557162
+2026-04-22 16:18:08 | INFO | src.models.training.trainer | step 9300 | loss 0.114680
+2026-04-22 16:18:12 | INFO | src.models.training.trainer | step 9400 | loss 0.088642
+2026-04-22 16:18:16 | INFO | src.models.training.trainer | step 9500 | loss 0.164973
+2026-04-22 16:18:51 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-38332/checkpoint.pt
+2026-04-22 16:18:51 | INFO | src.models.checkpointing.checkpoint_manager | Checkpoint queued: /teamspace/studios/this_studio/Truthlens-Ai/models/checkpoints/checkpoint-1000000003/checkpoint.pt
+2026-04-22 16:18:58 | INFO | __main__ | Training complete
+2026-04-22 16:18:59 | INFO | src.utils.json_utils | Saved JSON file: /content/truthlens_model/config.json
+2026-04-22 16:18:59 | INFO | __main__ | Local save complete: /content/truthlens_model/pytorch_model.bin
+2026-04-22 16:19:01 | INFO | __main__ | Drive sync complete: /teamspace/studios/this_studio/Truthlens-Ai/models/truthlens_model
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+2026-04-22 16:19:36 | WARNING | __main__ | Test evaluation skipped: no bias logits returned by model
+2026-04-22 16:19:36 | INFO | __main__ | Pipeline finished | history={'train_loss': [1.0105187892913818, 0.4172244966030121, 0.28370243310928345, 0.21499113738536835], 'val_loss': [0.3775576055049896, 0.28376996517181396]}

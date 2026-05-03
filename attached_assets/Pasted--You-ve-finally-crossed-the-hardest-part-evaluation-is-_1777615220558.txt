@@ -1,0 +1,227 @@
+🔥 You’ve finally crossed the **hardest part** — evaluation is now **actually running**.
+What remains is **label–prediction alignment**, not system failure.
+
+---
+
+# ✅ What is NOW working (important milestone)
+
+From your latest logs:
+
+```text
+[COLLECT] multi-task done
+[PIPELINE] task=bias
+[PIPELINE] task=ideology
+...
+```
+
+📌 Confirmed: 
+
+👉 This means:
+
+* ✔ Model inference working
+* ✔ Labels loaded
+* ✔ Evaluation pipeline running
+* ✔ Predictions collected per task
+
+---
+
+# 🚨 Current Failure (final real bug)
+
+```text
+ValueError: Shape mismatch: y_true (3,) vs y_pred (3, 3)
+```
+
+---
+
+# 🧠 What this means
+
+You have:
+
+* `y_true` → class labels
+
+  ```python
+  [0, 1, 2]
+  ```
+
+* `y_pred` → probability/logits matrix
+
+  ```python
+  [[0.2, 0.5, 0.3],
+   [0.1, 0.7, 0.2],
+   [0.6, 0.2, 0.2]]
+  ```
+
+👉 Shape mismatch:
+
+| Variable | Shape  | Meaning       |
+| -------- | ------ | ------------- |
+| `y_true` | (3,)   | class IDs     |
+| `y_pred` | (3, 3) | probabilities |
+
+---
+
+# ⚠️ Why evaluation crashes
+
+Your evaluation expects:
+
+```python
+y_pred = [0, 1, 2]   # class indices
+```
+
+BUT receives:
+
+```python
+y_pred = [[...], [...], [...]]  # probabilities
+```
+
+---
+
+# ✅ FIX (MANDATORY)
+
+Go to:
+
+```text
+src/evaluation/evaluate_model.py
+```
+
+---
+
+## 🔧 Find this area (around line ~221)
+
+You’ll see something like:
+
+```python
+if y_true.shape != y_pred.shape:
+    raise ValueError(...)
+```
+
+---
+
+## ✅ FIX BEFORE THAT
+
+Convert probabilities → class predictions:
+
+```python
+import numpy as np
+
+if len(y_pred.shape) == 2:
+    y_pred = np.argmax(y_pred, axis=1)
+```
+
+---
+
+## 💡 Full safe patch
+
+```python
+# Ensure y_pred is class labels
+if isinstance(y_pred, np.ndarray) and len(y_pred.shape) == 2:
+    y_pred = np.argmax(y_pred, axis=1)
+
+# Optional: ensure y_true is 1D
+y_true = np.array(y_true).reshape(-1)
+```
+
+---
+
+# 🚨 Secondary Warning (already visible)
+
+```text
+y_pred contains classes not in y_true
+```
+
+👉 Means:
+
+* model predicts class not present in ground truth
+
+### Example:
+
+```python
+y_true = [0, 1]
+y_pred = [0, 2]
+```
+
+---
+
+## ✅ Fix (optional but recommended)
+
+```python
+labels = sorted(set(y_true))
+```
+
+Use this in metrics:
+
+```python
+precision_score(y_true, y_pred, labels=labels)
+```
+
+---
+
+# 📊 Final System State
+
+| Component           | Status       |
+| ------------------- | ------------ |
+| Model               | ✅            |
+| GPU                 | ✅            |
+| Predictions         | ✅            |
+| Labels              | ✅            |
+| Evaluation pipeline | ✅            |
+| Metrics computation | ❌ (THIS BUG) |
+
+---
+
+# 🚀 After this fix — expected result
+
+```json
+"metrics": {
+  "score": 0.62,
+  "confidence": 0.71,
+  "probabilities": [...]
+}
+```
+
+---
+
+# 💡 Key Insight
+
+You are now at:
+
+> 🔥 **“evaluation math mismatch” stage**
+
+NOT:
+
+* model issue ❌
+* pipeline issue ❌
+* system issue ❌
+
+---
+
+# 🎯 Final Action Plan
+
+1. Convert logits → class indices (`argmax`)
+2. Ensure `y_true` shape = `(N,)`
+3. (Optional) align label sets
+
+---
+
+# 🏁 Reality Check
+
+You’ve successfully built:
+
+* multi-task transformer ✅
+* GPU inference ✅
+* explainability ✅
+* evaluation pipeline ✅
+
+👉 This last fix = **complete system**
+
+---
+
+# If you want next step
+
+I can help you:
+
+* compute proper per-task metrics (F1, accuracy, AUROC)
+* design final scoring formula
+* prepare output for **project demo / publication**
+
+Just say 👍

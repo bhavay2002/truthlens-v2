@@ -1,0 +1,235 @@
+🚀 TRUTHLENS DATA LAYER AUDIT PROMPT (v3 – PERFORMANCE CRITICAL)
+You are a principal ML data systems architect, high-performance computing engineer, and pipeline auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the src/data/ folder.
+This is a critical system component.
+Failure here invalidates the entire ML pipeline.
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Every data transformation must be correct, traceable, cacheable, and GPU-efficient.
+You must ensure:
+•	No data leakage ❌
+•	No token misalignment ❌
+•	No redundant computation ❌
+•	No CPU bottlenecks ❌
+•	No unused data modules ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/data/* files
+Also validate integration with:
+•	src/config/
+•	utils/ (only if used inside data layer)
+•	config/
+________________________________________
+🔥 AUDIT DIMENSIONS (DATA-SPECIFIC)
+________________________________________
+1. 📥 DATA INGESTION VALIDATION
+Trace:
+raw source → dataframe → preprocessing → dataset
+MUST VERIFY:
+•	File loading correctness (CSV/JSON/Parquet)
+•	Schema consistency
+•	Column presence (text, label, id)
+•	Encoding issues (UTF-8 errors)
+CRITICAL:
+•	Detect silent truncation
+•	Detect dtype corruption
+•	Detect implicit casting
+________________________________________
+2. 🧼 PREPROCESSING CORRECTNESS + COST
+Check:
+•	Is preprocessing pure + deterministic?
+•	Any repeated transformations inside __getitem__? ❌ (FORBIDDEN)
+•	Regex inefficiencies?
+•	Lowercasing / normalization inconsistencies?
+OPTIMIZATION:
+•	Move ALL heavy preprocessing before dataset creation
+•	Vectorize operations (pandas / numpy)
+________________________________________
+3. 🧠 TOKENIZATION + ALIGNMENT (HIGHEST PRIORITY)
+Trace:
+raw_text → cleaned_text → tokenizer → offsets → model input
+MUST VERIFY:
+•	return_offsets_mapping=True present
+•	Token indices align with original text
+•	No truncation-induced misalignment
+•	Padding handled consistently
+CRITICAL BUGS:
+•	Mixing word-level features with BPE tokens
+•	Dropping offsets before explanation layer
+________________________________________
+4. 📦 DATASET CLASS (PERFORMANCE CRITICAL)
+MUST CHECK:
+•	__getitem__ is O(1) (NO heavy compute)
+•	No tokenization inside loop ❌
+•	No pandas .iloc bottleneck in hot path
+REQUIRED:
+•	Pre-tokenization OR caching
+•	Memory-efficient storage
+________________________________________
+5. 🚀 DATALOADER (GPU OPTIMIZATION FOCUS)
+MUST VERIFY:
+•	pin_memory=True
+•	num_workers > 0
+•	persistent_workers=True
+•	prefetch_factor tuned
+CRITICAL:
+•	No CPU→GPU sync bottlenecks
+•	Batch collation efficient
+FLAG:
+•	Missing non_blocking=True downstream
+•	Small batch size underutilizing GPU
+________________________________________
+6. 💾 CACHING SYSTEM (MANDATORY FOR PERFORMANCE)
+Trace:
+config → hash → cache file → reload
+MUST VERIFY:
+•	Cache key depends on:
+o	dataset config
+o	tokenizer config
+o	preprocessing config
+CRITICAL:
+•	Cache invalidation correctness
+•	No stale cache reuse
+________________________________________
+7. ⚙️ CONFIG INTEGRATION (STRICT)
+MUST VERIFY:
+•	No hardcoded:
+o	batch size
+o	max length
+o	tokenizer name
+•	All parameters come from config
+FLAG:
+•	Duplicate config definitions
+•	Unused config keys
+________________________________________
+8. 🧹 UNUSED / DEAD DATA CODE
+You MUST detect:
+File: X
+Status: UNUSED / PARTIALLY USED
+Impact: memory / confusion
+Fix: remove or integrate
+________________________________________
+9. 🛡️ DATA LEAKAGE DETECTION (CRITICAL)
+MUST CHECK:
+•	Train/val/test overlap
+•	Label leakage via preprocessing
+•	Target leakage via feature construction
+________________________________________
+10. ⚡ PERFORMANCE BOTTLENECK ANALYSIS (DEEP)
+Identify:
+•	repeated tokenization
+•	dataframe access in loop
+•	Python loops instead of vectorization
+•	disk I/O inside training loop
+Provide:
+•	exact fix
+•	expected speedup
+________________________________________
+11. 🧪 EDGE CASE ROBUSTNESS
+Check:
+•	empty text
+•	extremely long text
+•	batch size = 1
+•	missing labels
+•	unicode / multilingual text
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL DATA BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why it breaks pipeline:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Bottleneck:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. TOKEN ALIGNMENT ISSUES
+________________________________________
+🧠 4. DATA LEAKAGE RISKS
+________________________________________
+🚀 5. GPU / DATALOADER ISSUES
+________________________________________
+💾 6. CACHING ISSUES
+________________________________________
+⚙️ 7. CONFIG ISSUES
+________________________________________
+🧹 8. UNUSED DATA FILES
+________________________________________
+🧪 9. EDGE CASE FAILURES
+________________________________________
+✅ 10. VERIFIED COMPONENTS
+________________________________________
+📉 11. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+________________________________________
+⚠️ MANDATORY RULES
+•	NO assumptions
+•	NO skipping files
+•	MUST trace execution path
+•	MUST prioritize performance
+•	MUST give code-level fixes
+•	MUST quantify bottlenecks where possible
+________________________________________
+Also check if 6 different dataset(18 as divide into train test validation ) work well with scema
+
+bias{
+text
+bias_label-0,1}
+
+ideology{
+text
+ideology_label-0,1,2}
+
+propaganda{
+text
+propaganda_label-0,1}
+
+frame{
+text
+CO-0,1
+EC-0,1
+HI-0,1
+MO-0,1
+RE-0,1
+}
+
+narrative{
+text
+hero-0,1
+villain-0,1
+victim-0,1
+hero_entities-text
+villain_entities-text
+victim_entities-text}
+
+emotion{
+text
+emotion_0-0,1
+emotion_1
+emotion_2
+emotion_3
+emotion_4
+emotion_5
+emotion_6
+emotion_7
+emotion_8
+emotion_9
+emotion_10
+emotion_11
+emotion_12
+emotion_13
+emotion_14
+emotion_15
+emotion_16
+emotion_17
+emotion_18
+emotion_19}
+

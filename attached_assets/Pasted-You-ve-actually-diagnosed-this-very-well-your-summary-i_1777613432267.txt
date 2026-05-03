@@ -1,0 +1,202 @@
+You’ve actually diagnosed this very well — your summary is **correct**, but let me tighten it into a precise conclusion so you don’t misinterpret results.
+
+---
+
+# 🎯 What’s REALLY happening in your system
+
+From everything you’ve shown so far:
+
+> ✅ Your model is working
+> ❌ Your evaluation is NOT running
+
+---
+
+# 🧠 Final Diagnosis (No ambiguity)
+
+### You are in **Case 1: No labels provided**
+
+Because:
+
+* You’re running:
+
+  ```bash
+  main.py --mode infer
+  ```
+
+* And your code clearly requires:
+
+```python
+if args.evaluate and args.labels_file:
+```
+
+OR:
+
+```python
+if self.enable_evaluation and labels is not None:
+```
+
+👉 Without labels → evaluation block is skipped
+
+---
+
+# 🚨 Why your metrics = 0.0
+
+Not because:
+
+* model is bad ❌
+* training failed ❌
+
+But because:
+
+* evaluation never executed ❌
+
+👉 So system returns:
+
+```json
+"score": 0.0
+```
+
+**by design**
+
+---
+
+# 🔍 How to PROVE this (quick sanity test)
+
+Run this:
+
+```bash
+python main.py --mode infer --evaluate --labels_file test_labels.json
+```
+
+### Expected change:
+
+| Before               | After                 |
+| -------------------- | --------------------- |
+| score = 0.0          | score > 0             |
+| confidence = None    | confidence populated  |
+| probabilities = None | probabilities present |
+
+---
+
+# ⚠️ Don’t confuse these 3 scenarios
+
+## ✅ Case 1 — YOUR current situation
+
+**No labels provided**
+
+* predictions vary ✔
+* metrics = 0.0 ✔
+* system working ✔
+
+---
+
+## ⚠️ Case 2 — Weak model
+
+Check:
+
+```python
+print(predictions["bias_probabilities"])
+```
+
+If:
+
+```text
+[0.50, 0.50, 0.50]
+```
+
+👉 Model is undertrained
+
+---
+
+## ⚠️ Case 3 — Wrong data split
+
+* training on dataset A
+* testing on unrelated text
+
+👉 performance looks bad (but metrics still compute)
+
+---
+
+# 🧪 What you should do RIGHT NOW
+
+## Step 1 — Get test labels
+
+Format example:
+
+```json
+[
+  {
+    "text": "some news text",
+    "bias": 1,
+    "emotion": 3,
+    "propaganda": 0
+  }
+]
+```
+
+---
+
+## Step 2 — Run evaluation
+
+```bash
+python main.py \
+  --mode infer \
+  --evaluate \
+  --labels_file data/test_labels.json
+```
+
+---
+
+## Step 3 — Verify output
+
+You should see:
+
+```json
+"metrics": {
+  "score": 0.6,
+  "confidence": 0.7,
+  "probabilities": [...]
+}
+```
+
+---
+
+# 💡 Important Insight (for your project)
+
+Right now your system is:
+
+> 🔹 Inference engine (working)
+> 🔹 NOT an evaluation system (yet)
+
+---
+
+# 🔥 Recommendation (make your system robust)
+
+Modify your pipeline:
+
+```python
+if labels is None:
+    logger.warning("Evaluation skipped: no labels provided")
+```
+
+👉 So you don’t get misled again
+
+---
+
+# 🎯 Final Answer
+
+✔ Your reasoning is correct
+✔ Your issue = **missing labels during evaluation**
+✔ Model is NOT the problem
+
+---
+
+# If you want next step
+
+I can help you:
+
+* define exact label schema for all 6 tasks
+* generate a test dataset from your training data
+* wire automatic evaluation after training
+
+Just tell me 👍

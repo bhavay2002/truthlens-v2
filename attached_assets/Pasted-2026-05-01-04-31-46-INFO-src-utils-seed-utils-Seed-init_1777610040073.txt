@@ -1,0 +1,110 @@
+2026-05-01 04:31:46 | INFO | src.utils.seed_utils | Seed initialized | base=42 | rank=0 | final=42 | deterministic=False
+2026-05-01 04:31:46 | INFO | __main__ |  TruthLens System Started | mode=infer
+`resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
+2026-05-01 04:31:46 | INFO | __main__ | 🧪 Running FULL TruthLens pipeline
+2026-05-01 04:31:46 | INFO | src.utils.settings | Loaded settings from /teamspace/studios/this_studio/Truthlens-Ai/config/config.yaml
+2026-05-01 04:31:46 | WARNING | __main__ |  No checkpoint at /teamspace/studios/this_studio/Truthlens-Ai/saved_models/checkpoint.pt — running the analysis / features / aggregation stack only. Run `python main.py --mode train` (after placing the dataset CSVs under data/{train,val,test}/) to produce a checkpoint and unlock prediction.
+2026-05-01 04:31:46 | INFO | src.analysis.spacy_loader | [spaCy] Loading | model=en_core_web_sm | disable=()
+2026-05-01 04:31:47 | INFO | src.analysis.preprocessing | PreprocessingPipeline initialized
+2026-05-01 04:31:47 | WARNING | src.pipelines.truthlens_pipeline | TruthLensPipeline initialised WITHOUT a predictor — the prediction + explainability stages will be skipped and analyse() will return predictions={}.
+2026-05-01 04:31:47 | INFO | src.aggregation.feature_mapper | [FeatureMapper] init | strict=False normalize=False calibrated=False
+2026-05-01 04:31:47 | INFO | src.aggregation.weight_manager | [WeightManager] Initialized | version=v2 frozen=False
+2026-05-01 04:31:47 | INFO | src.utils.config_loader | Loaded config | tasks=6
+2026-05-01 04:31:47 | INFO | src.aggregation.aggregation_pipeline | [AggregationPipeline] Initialized
+2026-05-01 04:31:47 | INFO | src.graph.graph_config | GraphConfigLoader initialized
+2026-05-01 04:31:47 | INFO | src.graph.graph_config | GraphConfig loaded
+2026-05-01 04:31:47 | INFO | src.graph.narrative_graph_builder | NarrativeGraphBuilder initialized (spacy=yes)
+2026-05-01 04:31:47 | INFO | src.graph.temporal_graph | TemporalGraphAnalyzer initialized
+2026-05-01 04:31:47 | INFO | src.graph.graph_analysis | GraphAnalyzer initialized
+2026-05-01 04:31:47 | INFO | src.graph.narrative_graph_builder | NarrativeGraphBuilder initialized (spacy=yes)
+2026-05-01 04:31:47 | INFO | src.graph.graph_analysis | GraphAnalyzer initialized
+2026-05-01 04:31:47 | INFO | src.graph.graph_features | GraphFeatureExtractor initialized
+2026-05-01 04:31:47 | INFO | src.graph.temporal_graph | TemporalGraphAnalyzer initialized
+2026-05-01 04:31:47 | INFO | src.graph.graph_explainer | GraphExplainer initialized (weights node=0.40 edge=0.30 temporal=0.30)
+2026-05-01 04:31:47 | INFO | src.analysis.framing_analysis | FramingAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.ideological_language_detector | IdeologicalLanguageDetector initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.information_density_analyzer | InformationDensityAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.information_omission_detector | InformationOmissionDetector initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.spacy_loader | [spaCy] Loading | model=en_core_web_sm | disable=('parser',)
+2026-05-01 04:31:47 | INFO | src.analysis.emotion_target_analysis | EmotionTargetAnalyzer initialized
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_conflict | NarrativeConflictAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_propagation | NarrativePropagationAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_role_extractor | NarrativeRoleExtractor initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_temporal_analyzer | NarrativeTemporalAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.rhetorical_device_detector | RhetoricalDeviceDetector initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.source_attribution_analyzer | SourceAttributionAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.integration_runner | AnalysisIntegrationRunner initialized | analyzers=15
+2026-05-01 04:31:47 | INFO | src.graph.graph_pipeline | GraphPipeline initialized
+2026-05-01 04:31:47 | INFO | src.pipelines.truthlens_pipeline | TruthLensPipeline: evaluation enabled — call analyze_batch(texts, labels=...) or evaluate(texts, labels) to actually run it. Per-article analyse() will not invoke the evaluator (it is dataset-level).
+2026-05-01 04:31:47 | INFO | src.analysis.rhetorical_device_detector | RhetoricalDeviceDetector initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.emotion_target_analysis | EmotionTargetAnalyzer initialized
+2026-05-01 04:31:47 | INFO | src.analysis.framing_analysis | FramingAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.information_density_analyzer | InformationDensityAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.information_omission_detector | InformationOmissionDetector initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.ideological_language_detector | IdeologicalLanguageDetector initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_role_extractor | NarrativeRoleExtractor initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_conflict | NarrativeConflictAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_propagation | NarrativePropagationAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.narrative_temporal_analyzer | NarrativeTemporalAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.source_attribution_analyzer | SourceAttributionAnalyzer initialized (final)
+2026-05-01 04:31:47 | INFO | src.analysis.analysis_pipeline | AnalysisPipeline initialized | analyzers=14 | mode=safe
+2026-05-01 04:31:47 | INFO | src.analysis.bias_profile_builder | BiasProfileBuilder initialized
+2026-05-01 04:31:47 | INFO | src.analysis.orchestrator | AnalysisOrchestrator initialized (final)
+2026-05-01 04:31:47 | INFO | src.pipelines.truthlens_pipeline | TruthLensPipeline initialized (parallel_stages=True, max_text_length=100000, max_seq_length=512)
+2026-05-01 04:31:47 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:47 | WARNING | src.analysis.emotion_target_analysis | EmotionTarget: doc.vocab does not match PhraseMatcher vocab; falling back to token-only matching for this doc
+2026-05-01 04:31:47 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:47 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:47 | WARNING | truthlens.monitoring | feature_anomaly_detected
+2026-05-01 04:31:47 | INFO | truthlens.monitoring | feature_summary
+2026-05-01 04:31:47 | ERROR | src.analysis.orchestrator | Orchestrator run failed
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/analysis/orchestrator.py", line 61, in run
+    result = self._post_process(raw, text)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/analysis/orchestrator.py", line 202, in _post_process
+    propaganda = self.propaganda.analyze(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: PropagandaPatternDetector.analyze() missing 1 required positional argument: 'ctx_or_text'
+2026-05-01 04:31:47 | INFO | src.analysis.spacy_loader | [spaCy] Loading | model=en_core_web_sm | disable=('ner',)
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:48 | WARNING | src.analysis.emotion_target_analysis | EmotionTarget: doc.vocab does not match PhraseMatcher vocab; falling back to token-only matching for this doc
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:48 | WARNING | truthlens.monitoring | feature_anomaly_detected
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | feature_summary
+2026-05-01 04:31:48 | ERROR | src.analysis.orchestrator | Orchestrator run failed
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/analysis/orchestrator.py", line 61, in run
+    result = self._post_process(raw, text)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/analysis/orchestrator.py", line 202, in _post_process
+    propaganda = self.propaganda.analyze(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: PropagandaPatternDetector.analyze() missing 1 required positional argument: 'ctx_or_text'
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:48 | WARNING | src.analysis.emotion_target_analysis | EmotionTarget: doc.vocab does not match PhraseMatcher vocab; falling back to token-only matching for this doc
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | timing
+2026-05-01 04:31:48 | WARNING | truthlens.monitoring | feature_anomaly_detected
+2026-05-01 04:31:48 | INFO | truthlens.monitoring | feature_summary
+2026-05-01 04:31:48 | ERROR | src.analysis.orchestrator | Orchestrator run failed
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/analysis/orchestrator.py", line 61, in run
+    result = self._post_process(raw, text)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/analysis/orchestrator.py", line 202, in _post_process
+    propaganda = self.propaganda.analyze(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: PropagandaPatternDetector.analyze() missing 1 required positional argument: 'ctx_or_text'
+2026-05-01 04:31:48 | INFO | __main__ |  BATCH SUMMARY: n=3 total_time=0.855s model_version=roberta-base
+2026-05-01 04:31:48 | INFO | __main__ |  RESULT 1:
+2026-05-01 04:31:48 | INFO | __main__ |   scores: {'tasks': {'graph': {'score': 0.7355919139385062, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph_explanation': {'score': 0.4999999999996, 'confidence': None, 'probabilities': None, 'entropy': None}}, 'manipulation_risk': 0.0, 'credibility_score': 0.2574571698782197, 'final_score': 0.6287285849384812, 'uncertainty_summary': None}
+2026-05-01 04:31:48 | INFO | __main__ |   predictions keys: []
+2026-05-01 04:31:48 | INFO | __main__ |  RESULT 2:
+2026-05-01 04:31:48 | INFO | __main__ |   scores: {'tasks': {'graph': {'score': 0.7355919139385062, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph_explanation': {'score': 0.4999999999996, 'confidence': None, 'probabilities': None, 'entropy': None}}, 'manipulation_risk': 0.0, 'credibility_score': 0.2574571698782197, 'final_score': 0.6287285849384812, 'uncertainty_summary': None}
+2026-05-01 04:31:48 | INFO | __main__ |   predictions keys: []
+2026-05-01 04:31:48 | INFO | __main__ |  RESULT 3:
+2026-05-01 04:31:48 | INFO | __main__ |   scores: {'tasks': {'graph': {'score': 0.7355919139385062, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph_explanation': {'score': 0.4999999999996, 'confidence': None, 'probabilities': None, 'entropy': None}}, 'manipulation_risk': 0.0, 'credibility_score': 0.2574571698782197, 'final_score': 0.6287285849384812, 'uncertainty_summary': None}
+2026-05-01 04:31:48 | INFO | __main__ |   predictions keys: []
+2026-05-01 04:31:48 | INFO | __main__ |  SYSTEM COMPLETED SUCCESSFULLY

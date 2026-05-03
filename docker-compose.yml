@@ -1,0 +1,24 @@
+# Docker Compose for TruthLens AI
+
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: truthlens-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./data:/app/data
+    environment:
+      - LOG_LEVEL=INFO
+      - MODEL_PATH=/app/models/roberta_model
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

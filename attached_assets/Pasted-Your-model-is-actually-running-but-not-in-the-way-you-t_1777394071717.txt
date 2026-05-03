@@ -1,0 +1,221 @@
+Your model **is actually running** — but not in the way you think. The logs clearly show the real problem:
+
+---
+
+# 🔴 Core Issue: Model NOT Attached to Pipeline
+
+This line is the smoking gun:
+
+```text
+TruthLensPipeline initialised WITHOUT a predictor — the prediction + explainability stages will be skipped
+```
+
+
+
+### What this means technically
+
+* ✅ Pipeline executed
+* ✅ Feature extraction worked
+* ✅ Graph + analysis worked
+* ❌ **ML model (predictor) was NEVER loaded**
+* ❌ Therefore → `predictions = {}`
+
+---
+
+# 🔍 Evidence from your output
+
+### 1. No predictions
+
+```text
+predictions keys: []
+```
+
+
+
+### 2. Metrics score = 0
+
+```python
+'metrics': {'score': 0.0, 'confidence': None}
+```
+
+
+
+👉 That’s because:
+
+> No classifier → no logits → no probabilities → no metrics
+
+---
+
+# ⚠️ So your statement:
+
+> "model not run"
+
+❌ Incorrect
+✅ Correct diagnosis:
+
+> **Model is not initialized / injected into pipeline**
+
+---
+
+# 🔴 Why this happened
+
+Your pipeline likely expects something like:
+
+```python
+TruthLensPipeline(predictor=model)
+```
+
+But you are doing:
+
+```python
+TruthLensPipeline()  # predictor=None
+```
+
+---
+
+# 🔧 Fix — Attach Model Properly
+
+## ✅ Step 1 — Load model
+
+Somewhere before pipeline init:
+
+```python
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+model_name = "roberta-base"
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+```
+
+---
+
+## ✅ Step 2 — Wrap into predictor (IMPORTANT)
+
+Your system likely expects a predictor wrapper.
+
+Example:
+
+```python
+class Predictor:
+    def __init__(self, model, tokenizer, device="cpu"):
+        self.model = model.to(device)
+        self.tokenizer = tokenizer
+        self.device = device
+
+    def predict(self, texts):
+        inputs = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(self.device)
+        outputs = self.model(**inputs)
+        return outputs.logits
+```
+
+---
+
+## ✅ Step 3 — Inject into pipeline
+
+```python
+predictor = Predictor(model, tokenizer, device="cuda")
+
+pipeline = TruthLensPipeline(
+    predictor=predictor,
+    parallel_stages=True
+)
+```
+
+---
+
+# 🔥 Hidden Problem You ALSO Have
+
+## Lexicons STILL missing
+
+Even now:
+
+```text
+Lexicon file missing...
+```
+
+👉 This means:
+
+* FramingAnalyzer degraded
+* IdeologyDetector degraded
+* Bias signals incomplete
+
+Your model (when attached) will get **weak features**
+
+---
+
+# ⚠️ Another subtle issue
+
+```text
+EmotionTarget: doc.vocab does not match PhraseMatcher vocab
+```
+
+
+
+👉 You are:
+
+* Loading spaCy multiple times
+* With different pipelines
+
+This causes:
+
+* matcher mismatch
+* degraded NLP quality
+
+---
+
+# ✅ What a Fully Working System Should Show
+
+After fix, logs should include:
+
+```text
+TruthLensPipeline initialized WITH predictor
+```
+
+and:
+
+```text
+predictions keys: ['bias', 'ideology', 'propaganda', ...]
+```
+
+and:
+
+```python
+'metrics': {
+  'score': 0.83,
+  'confidence': 0.91,
+  'probabilities': [...]
+}
+```
+
+---
+
+# ✅ Final Fix Checklist
+
+### CRITICAL (model not running)
+
+* [ ] Load HuggingFace model
+* [ ] Wrap into predictor
+* [ ] Pass predictor into pipeline
+
+### IMPORTANT
+
+* [ ] Fix lexicon files (still missing)
+* [ ] Use single shared spaCy instance
+
+### HIGH IMPACT
+
+* [ ] Move model loading to config-driven system
+
+---
+
+# 💡 If You Want Next Step
+
+I can:
+
+* Integrate **multi-task classifier (bias + ideology + propaganda)**
+* Optimize for **GPU + batching + FP16**
+* Plug directly into your pipeline architecture
+
+Just say:
+👉 **“attach real multitask model”**

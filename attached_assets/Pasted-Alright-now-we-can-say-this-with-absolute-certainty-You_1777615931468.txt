@@ -1,0 +1,209 @@
+Alright — now we can say this with **absolute certainty**:
+
+> ❌ Your fix is NOT being executed inside `evaluate()`
+> 👉 because the error is **identical across 3 runs**
+
+---
+
+# 🚨 Final Confirmation (from your latest log)
+
+```text
+ValueError: Shape mismatch: y_true (3,) vs y_pred (3, 3)
+```
+
+📌 Seen again here: 
+
+---
+
+# 🧠 What this proves (no ambiguity now)
+
+* `y_pred` is STILL `(3, 3)`
+* Your `argmax` conversion is **not applied where it matters**
+* OR evaluation is using a **different variable than you modified**
+
+---
+
+# 🔥 The REAL problem (subtle but critical)
+
+Your pipeline is likely doing:
+
+```python
+y_pred = something  # you modified this
+...
+# later
+y_pred = something_else  # overwrites your fix ❌
+```
+
+👉 So your fix gets **silently overridden**
+
+---
+
+# ✅ FINAL FIX (bulletproof)
+
+You must force conversion **at the LAST possible point before metrics**
+
+---
+
+## 🔧 Go to:
+
+```text
+src/evaluation/evaluate_model.py
+```
+
+---
+
+## 🎯 Find THIS exact line (your crash line ~226):
+
+```python
+raise ValueError(f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}")
+```
+
+---
+
+## ✅ Replace the whole block ABOVE it with THIS:
+
+```python
+import numpy as np
+
+# 🔥 FORCE conversion (no conditions skipped)
+y_pred = np.array(y_pred)
+
+if y_pred.ndim == 2:
+    print("FORCE FIX: converting y_pred", y_pred.shape)
+    y_pred = np.argmax(y_pred, axis=1)
+    print("FORCE FIX: converted y_pred", y_pred.shape)
+
+y_true = np.array(y_true).reshape(-1)
+
+# NOW check
+if y_true.shape != y_pred.shape:
+    raise ValueError(
+        f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}"
+    )
+```
+
+---
+
+# 🧪 MUST SEE THIS OUTPUT
+
+When you run:
+
+```text
+FORCE FIX: converting y_pred (3, 3)
+FORCE FIX: converted y_pred (3,)
+```
+
+---
+
+## ❌ If you do NOT see this
+
+Then:
+
+> 🚨 You are editing the WRONG file or wrong function
+
+---
+
+# ⚠️ One more hidden issue (very likely)
+
+From your logs:
+
+```text
+predictions keys:
+'bias_probabilities'
+'bias_predictions'
+```
+
+👉 That means:
+
+You SHOULD NOT be using logits/probabilities at all.
+
+---
+
+## 🔥 BETTER FIX (clean solution)
+
+In:
+
+```text
+evaluation_pipeline.py
+```
+
+Find:
+
+```python
+y_pred = outputs[task]
+```
+
+---
+
+## ✅ Replace with:
+
+```python
+y_pred = outputs[f"{task}_predictions"]
+```
+
+---
+
+# 🎯 Clean architecture rule
+
+| Data type            | Use for                |
+| -------------------- | ---------------------- |
+| logits/probabilities | training / calibration |
+| predictions (argmax) | evaluation metrics     |
+
+---
+
+# 📊 Your system right now
+
+| Component           | Status       |
+| ------------------- | ------------ |
+| Model               | ✅            |
+| Predictions         | ✅            |
+| Labels              | ✅            |
+| Evaluation pipeline | ✅            |
+| Metrics             | ❌ (last bug) |
+
+---
+
+# 💡 Brutal Truth
+
+You are not debugging ML anymore.
+
+You are debugging:
+
+> ⚙️ **which variable is being passed to evaluator**
+
+---
+
+# 🚀 Fastest way to fix (recommended)
+
+👉 Instead of fixing `evaluate_model.py`
+
+Fix upstream:
+
+```python
+y_pred = outputs[f"{task}_predictions"]
+```
+
+DONE.
+
+---
+
+# 🎯 Final Answer
+
+* ❌ `y_pred` still 2D → wrong variable used
+* ❌ argmax not applied at final stage
+* ✅ either:
+
+  * force argmax inside `evaluate()`
+  * OR pass `*_predictions` instead of probabilities
+
+---
+
+# If you want this DONE in one shot
+
+Paste:
+
+* `evaluate_model.py`
+* `evaluation_pipeline.py`
+
+I’ll mark the **exact line numbers** to fix.

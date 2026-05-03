@@ -1,0 +1,194 @@
+🚀 TRUTHLENS MODELS LAYER AUDIT PROMPT (v10 – ARCHITECTURE + GPU CRITICAL)
+You are a principal deep learning architect, PyTorch performance engineer, and ML systems auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the src/models/ folder.
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Model implementations must be architecturally correct, numerically stable, GPU-efficient, and fully aligned with data, training, inference, and evaluation layers.
+You must ensure:
+•	No incorrect forward logic ❌
+•	No label/output misalignment ❌
+•	No numerical instability ❌
+•	No CPU bottlenecks ❌
+•	No redundant computation ❌
+•	No unused model components ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/models/ * all files and folder and subfiles
+Also validate integration with:
+•	src/data/ (input shapes, tokenization)
+•	src/training/ (loss + optimizer)
+•	src/inference/
+•	src/evaluation/
+•	src/config/
+________________________________________
+🔥 AUDIT DIMENSIONS (MODEL-SPECIFIC)
+________________________________________
+1. 🔗 MODEL PIPELINE INTEGRITY
+Trace:
+input_ids → embeddings → encoder → task heads → logits → loss
+MUST VERIFY:
+•	correct tensor flow
+•	consistent shapes across layers
+•	no skipped transformations
+CRITICAL:
+•	mismatch between encoder output and head input ❌
+•	incorrect tensor reshaping ❌
+________________________________________
+2. 🧠 MULTI-TASK ARCHITECTURE (CRITICAL FOR YOUR SYSTEM)
+Validate support for:
+•	binary tasks
+•	multi-class tasks
+•	multi-label tasks
+•	structured outputs (narrative/entities)
+MUST VERIFY:
+•	separate heads per task OR correct shared design
+•	correct output dimensions per task
+CRITICAL BUGS:
+•	shared head for incompatible tasks ❌
+•	wrong output size for labels ❌
+________________________________________
+3. ⚖️ LOSS FUNCTION CORRECTNESS
+MUST VERIFY:
+•	correct loss per task:
+o	BCEWithLogits → multi-label
+o	CrossEntropy → multi-class
+•	proper reduction (mean/sum)
+CRITICAL:
+•	applying softmax before CrossEntropy ❌
+•	using BCE for multi-class ❌
+________________________________________
+4. 🧮 NUMERICAL STABILITY
+Detect:
+•	NaNs / inf
+•	exploding gradients
+•	unstable activations
+MUST FIX:
+•	gradient clipping
+•	stable softmax/logits handling
+•	epsilon safeguards
+________________________________________
+5. 🚀 GPU / PERFORMANCE OPTIMIZATION (TOP PRIORITY)
+MUST VERIFY:
+•	all tensors on correct device
+•	no CPU↔GPU transfers mid-forward
+REQUIRED:
+•	mixed precision (torch.cuda.amp)
+•	efficient tensor ops
+FORBIDDEN:
+•	.cpu() inside forward ❌
+•	unnecessary tensor cloning ❌
+________________________________________
+6. ⚡ FORWARD PASS OPTIMIZATION
+MUST VERIFY:
+•	no redundant computation inside forward
+•	shared computations reused across heads
+CRITICAL:
+•	recomputing encoder outputs multiple times ❌
+________________________________________
+7. 🧩 TOKEN / INPUT ALIGNMENT
+MUST VERIFY:
+•	input_ids, attention_mask aligned
+•	padding handled correctly
+CRITICAL:
+•	ignoring attention mask ❌
+•	misaligned token positions ❌
+________________________________________
+8. 🔄 RECOMPUTATION ELIMINATION
+MUST VERIFY:
+•	embeddings computed once
+•	encoder run once per batch
+CRITICAL:
+•	duplicate forward passes ❌
+________________________________________
+9. 🧱 MODEL REGISTRY & USAGE
+MUST VERIFY:
+•	all models registered
+•	no dead model classes
+DETECT:
+Model: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+10. 🧪 TRAINING vs INFERENCE CONSISTENCY
+MUST VERIFY:
+•	same architecture used in inference
+•	no missing layers (e.g., dropout mismatch)
+CRITICAL:
+•	model.eval() differences affecting outputs ❌
+________________________________________
+11. 🧪 EDGE CASES
+Check:
+•	batch size = 1
+•	long sequences
+•	empty inputs
+•	extreme logits
+________________________________________
+12. ⚙️ CONFIG INTEGRATION
+MUST VERIFY:
+•	no hardcoded:
+o	hidden sizes
+o	number of classes
+o	dropout rates
+•	config controls architecture
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL MODEL BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why it breaks model:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. ARCHITECTURE ISSUES
+________________________________________
+🧠 4. LOSS FUNCTION ISSUES
+________________________________________
+🚀 5. GPU / DEVICE ISSUES
+________________________________________
+🔄 6. RECOMPUTATION ISSUES
+________________________________________
+🧹 7. UNUSED MODELS
+________________________________________
+⚙️ 8. CONFIG ISSUES
+________________________________________
+🧪 9. EDGE CASE FAILURES
+________________________________________
+✅ 10. VERIFIED COMPONENTS
+________________________________________
+📉 11. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST verify tensor shapes
+•	MUST ensure GPU efficiency
+•	MUST eliminate recomputation
+•	MUST validate multi-task design
+________________________________________
+🎯 SUCCESS CRITERIA (MODELS LAYER)
+A system where:
+•	Model architecture is correct + scalable ✅
+•	Multi-task outputs are properly handled ✅
+•	Computation is GPU-efficient ✅
+•	No redundant forward passes ✅
+•	Numerically stable training ✅
+•	Fully aligned with all other layers ✅
+________________________________________
+🔥 WHY THIS VERSION IS SUPERIOR
+•	Targets core system correctness
+•	Prevents silent training bugs
+•	Enforces multi-task architecture rigor
+•	Maximizes GPU utilization
+•	Aligns model with full pipeline
+

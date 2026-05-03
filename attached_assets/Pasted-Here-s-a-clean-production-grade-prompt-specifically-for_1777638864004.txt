@@ -1,0 +1,254 @@
+Here’s a **clean, production-grade prompt** specifically for generating a `features.md` file that documents your `src/features` module with full clarity and engineering rigor.
+
+---
+
+## 🔧 Prompt: Generate `features.md` for `src/features`
+
+You are a senior ML systems engineer and feature engineering expert with strong experience in production pipelines.
+
+Your task is to generate a COMPLETE, PRODUCTION-GRADE documentation file named `features.md` for the `src/features` folder of a machine learning repository.
+
+---
+
+## 🎯 Objective
+
+Create a highly structured and technically precise document that enables any ML engineer or developer to:
+
+* Fully understand how features are created and transformed
+* Trace feature generation from input data to model-ready format
+* Understand the reasoning behind each feature
+* Identify dependencies, risks, and performance considerations
+* Safely extend or modify the feature pipeline
+
+---
+
+## 📁 Scope
+
+Analyze ALL files inside:
+src/features/
+
+Include:
+
+* Every Python file
+* Subfolders (if any)
+* Shared utilities used for feature engineering
+
+---
+
+## 📚 Required Output Structure (STRICT)
+
+### 1. Overview
+
+* Purpose of `src/features`
+* Role in ML pipeline (data → features → model)
+* Relationship with:
+
+  * `src/data`
+  * `src/analysis`
+  * `src/aggregation`
+  * `src/models`
+
+---
+
+### 2. Folder Architecture
+
+* Tree structure of `src/features`
+* One-line explanation per file/module
+
+Example:
+src/features/
+├── build_features.py      → Main feature pipeline
+├── encoding.py            → Categorical encoding
+├── scaling.py             → Feature scaling
+├── interactions.py        → Feature combinations
+...
+
+---
+
+### 3. End-to-End Feature Pipeline
+
+* Step-by-step flow:
+
+  * Input dataset
+  * Sequence of transformations
+  * Final feature matrix (X)
+
+* Clearly describe:
+
+  * Execution order
+  * Function/module interactions
+  * Pipeline orchestration
+
+---
+
+### 4. File-by-File Deep Dive
+
+For EACH file:
+
+#### File: <filename.py>
+
+**Purpose**
+
+* Why this file exists (business + modeling reasoning)
+
+**Key Functions / Classes**
+For each function:
+
+* Function name
+* Input parameters (types + meaning)
+* Output (DataFrame, NumPy array, tensor, etc.)
+* Step-by-step transformation logic
+* Edge cases handled
+
+**Feature Transformations**
+
+* Type of transformations:
+
+  * Encoding (one-hot, label, target)
+  * Scaling (standardization, normalization)
+  * Feature interactions/crosses
+  * Aggregated features
+  * Date/time feature extraction
+  * Text/vector features (if any)
+
+**Dependencies**
+
+* Internal modules
+* External libraries (pandas, numpy, sklearn, etc.)
+
+**Performance Notes**
+
+* Vectorization
+* Memory usage
+* Batch processing
+
+---
+
+### 5. Feature Definitions Table
+
+Create a structured table:
+
+| Feature Name | Source Column(s) | Transformation | Data Type | Description |
+| ------------ | ---------------- | -------------- | --------- | ----------- |
+
+Include ALL final features used by the model.
+
+---
+
+### 6. Feature Selection Logic
+
+* Methods used:
+
+  * Correlation filtering
+  * Mutual information
+  * Model-based selection
+  * RFE (if used)
+* Thresholds and reasoning
+
+---
+
+### 7. Data Contracts
+
+* Input schema from `src/data` / `src/aggregation`
+* Output schema for model consumption
+* Data types, shapes, constraints
+
+---
+
+### 8. Leakage & Bias Prevention
+
+* Steps taken to prevent data leakage
+* Train/test split handling
+* Time-aware feature generation (if applicable)
+
+---
+
+### 9. Config Integration
+
+* Parameters from config files
+* Feature flags and toggles
+* Thresholds controlling transformations
+
+---
+
+### 10. Optimization & Efficiency
+
+* Handling large datasets
+* Sparse matrices
+* Parallel processing
+* GPU usage (if applicable)
+
+---
+
+### 11. Extensibility Guide
+
+* How to add a new feature
+* Where to integrate it in pipeline
+* Naming conventions and best practices
+
+---
+
+### 12. Common Pitfalls / Risks
+
+* High cardinality features
+* Multicollinearity
+* Overfitting due to feature explosion
+* Data drift impact on features
+
+---
+
+### 13. Example Usage
+
+* Minimal working example:
+
+  * Input → feature pipeline → output
+
+---
+
+## ⚠️ Constraints
+
+* DO NOT skip any file
+* DO NOT give vague explanations
+* DO NOT assume undocumented behavior
+* Be precise and implementation-aware
+
+---
+
+## 💡 Style Guidelines
+
+* Clean markdown formatting
+* Use tables for clarity
+* Use code blocks where needed
+* Keep explanations concise but deep
+
+---
+
+## 🚀 Goal
+
+After reading `features.md`, a developer should:
+
+* Understand every feature and its purpose
+* Reproduce feature generation without reading code
+* Safely modify or extend feature logic
+* Trust the feature pipeline for production use
+
+---
+
+## 💡 Why this prompt works
+
+This forces the AI to:
+
+* Capture **full feature lineage (critical in ML systems)**
+* Explain **transformations + reasoning (not just code)**
+* Include **leakage prevention (very high impact)**
+* Provide **model-ready clarity (what exactly goes into training)**
+
+---
+
+If you want, I can also generate:
+
+* 🔥 A **combined master doc** (`pipeline.md`) linking data → aggregation → features → model
+* ⚡ A **demo-ready simplified version** (perfect for your college project viva)
+* 📊 A **visual pipeline diagram prompt** for tools like Mermaid
+
+Just tell me 👍

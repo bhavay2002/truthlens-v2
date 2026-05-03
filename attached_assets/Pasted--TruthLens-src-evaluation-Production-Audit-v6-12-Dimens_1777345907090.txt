@@ -1,0 +1,312 @@
+🔬 TruthLens — src/evaluation/ Production Audit (v6, 12 Dimensions)
+Scope: 19 files / 5,220 LOC. Sources read in full: metrics_engine.py, evaluator.py, evaluation_engine.py, evaluation_pipeline.py, prediction_collector.py, calibration.py, threshold_optimizer.py, error_analysis.py, uncertainty.py, fairness.py, task_correlation.py, reliability_diagram.py, advanced_analysis.py, evaluate_model.py, evaluate_saved_model.py, mlflow_tracker.py, report_writer.py, evaluation_dashboard.py, pdf_report.py.
+Format: 13 sections per the v6 prompt. Every fix is code-level with file:line, exact patch, and rationale. No leakage, vectorized, no synthetic data.
+________________________________________
+🔴 1. CRITICAL ISSUES — must fix before shipping
+CRIT E1 — Test set leakage in Evaluator.evaluate (threshold optimization)
+File: src/evaluation/evaluator.py:169 174
+thresholds = None
+if y_proba_arr is not None:
+    try:
+        thresholds = self.threshold_optimizer.optimize(collected)   # ← fits on the same set being scored
+Why it’s critical. collected contains the test labels & probs. We tune the operating point on the test set and report metrics against it. That is textbook test set tuning — every binary/multilabel metric in the report becomes optimistic by 1 5 F1 points (worse on small sets). It also invalidates the multilabel per_label thresholds which were fitted via precision_recall_curve on the same y_true.
+Fix. Make threshold fitting an explicit val only step and apply on test:
+def evaluate(self, *, val_y_true=None, val_y_proba=None, ...):
+    ...
+    thresholds = None
+    if val_y_proba is not None and val_y_true is not None:
+        thresholds = self.threshold_optimizer.optimize({
+            "y_true": np.asarray(val_y_true),
+            "y_proba": np.asarray(val_y_proba),
+            "task": task, "task_type": task_type,
+        })
+    # apply to TEST predictions
+    if thresholds is not None and y_proba_arr is not None:
+        y_pred_arr = _apply_thresholds(y_proba_arr, thresholds, task_type)
+    metrics = compute_metrics_from_preds(...)
+And remove the in-place optimize(collected) call entirely. Add an assert val is not test guard.
+CRIT E2 — Test set leakage in calibration (Evaluator path + calibration single-call)
+File: src/evaluation/evaluator.py:154 161 and src/evaluation/calibration.py:288 295
+calibration = compute_calibration(logits=logits, y_true=y_true_arr, task_type=task_type)
+# inside compute_calibration:
+elif apply_temp_scaling:
+    T = fit_temperature(logits_arr, y_true_arr, task_type)   # fit on THE SAME data we measure ECE/Brier on
+The pipeline (evaluation_pipeline.py:138 151) supports val_logits/val_labels, but Evaluator.evaluate and the legacy evaluate_and_save → compute_all_calibration paths do not — they pass temperature=None, which silently re enters fit-on-test. ECE & Brier on a model fit at T* on the same set are biased low.
+Fix (3 places).
+1.	evaluator.py: add val_logits/val_labels kwargs and pass temperature=fit_calibration(val_logits, val_labels, task_type) into compute_calibration.
+2.	evaluate_saved_model.compute_all_calibration (line 130): add val_logits/val_labels params, call fit_calibration once on val and apply_temperature on test.
+3.	calibration.compute_calibration: when temperature is None and apply_temp_scaling, log a warning that this is statistically biased, not just a debug line. Default apply_temp_scaling=False going forward; require explicit opt-in.
+CRIT E3 — __aggregate__ averages log_loss together with accuracy/f1
+File: src/evaluation/metrics_engine.py:348 363, _aggregate at 442 457.
+_AGG_KEYS = (..., "mcc", "roc_auc", "roc_auc_macro", "log_loss")
+agg[key] = float(np.mean(values))   # arithmetic mean across tasks
+log_loss ∈ [0, ∞) is on a different scale than the other metrics in [0, 1]. The mean is meaningless and is then exposed to consumers that treat it as a percentage. Worse, EvaluationEngine._extract_val_loss (line 64) reads exactly this aggregated log_loss for early stopping — a single high entropy task swamps everything.
+Fix.
+•	Drop log_loss from _AGG_KEYS; expose it as agg["log_loss_mean"] only if all tasks are classification.
+•	For early stopping, use task weighted mean of per task log_loss with weights = num_samples:
+def _aggregate_loss(per_task, weights):
+    vals, w = [], []
+    for t, m in per_task.items():
+        if t == "__aggregate__": continue
+        ll = (m or {}).get("log_loss")
+        if isinstance(ll, (int, float)) and np.isfinite(ll):
+            vals.append(ll); w.append(weights.get(t, 1))
+    return float(np.average(vals, weights=w)) if vals else None
+CRIT E4 — _extract_val_loss falls back to 1 - accuracy (silently wrong for imbalanced)
+File: src/evaluation/evaluation_engine.py:75 85
+if isinstance(agg.get("accuracy"), (int, float)):
+    return float(1.0 - agg["accuracy"])
+On a 95/5 imbalanced binary task, 1 - acc ≈ 0.05 regardless of model quality — early stopping converges to a class-prior model. Use 1 - balanced_accuracy (already computed) or per-task log_loss, never raw accuracy.
+Fix.
+if isinstance(agg.get("balanced_accuracy"), (int, float)):
+    return float(1.0 - agg["balanced_accuracy"])
+CRIT E5 — is_binary detection silently misroutes multiclass labelled {0,1}
+File: src/evaluation/metrics_engine.py:111 114, mirrored in evaluate_model._infer_task_type:127.
+unique_classes = np.unique(np.concatenate([y_true_arr, y_pred_arr]))
+is_binary = unique_classes.size <= 2 and set(unique_classes.tolist()).issubset({0, 1})
+For a 3-class task {0,1,2} where the test slice happens to contain only classes {0,1} (rare classes pruned), this flags is_binary=True, switches the F1 average to "binary" and computes roc_auc with a single positive-class assumption. The reported metric is then NOT comparable across runs.
+Fix. Pass the authoritative task_type through compute_metrics_from_preds (already done) and use it instead of inferring:
+def compute_classification_metrics(..., *, task_type: Optional[str] = None, ...):
+    if task_type == "binary":
+        is_binary = True
+    elif task_type == "multiclass":
+        is_binary = False
+    else:
+        is_binary = (unique_classes.size <= 2 and {0,1}.issuperset(set(unique_classes.tolist()))
+                     and y_true_arr.max() <= 1)
+Then change compute_metrics_from_preds line 312 to forward task_type=task_type. Same fix in evaluate_model._infer_task_type (or remove it when task is given).
+CRIT E6 — Multilabel log_loss reimplemented (silently wrong on edge cases)
+File: src/evaluation/metrics_engine.py:270 277
+proba_clipped = np.clip(proba_arr, EPS, 1.0 - EPS)
+metrics["log_loss"] = float(
+    -np.mean(y_true_arr * np.log(proba_clipped) + (1 - y_true_arr) * np.log(1 - proba_clipped))
+)
+This is the element-wise binary cross-entropy averaged over N×L. sklearn’s log_loss per label normalizes per sample. The two are not comparable across reports and our own ROC AUC uses sklearn — mixing conventions makes the dashboard misleading.
+Fix. Use sklearn.metrics.log_loss per label and average:
+from sklearn.metrics import log_loss
+per_label_ll = [
+    log_loss(y_true_arr[:, i], proba_arr[:, i], labels=[0, 1])
+    for i in range(y_true_arr.shape[1])
+    if len(np.unique(y_true_arr[:, i])) > 1
+]
+if per_label_ll:
+    metrics["log_loss"] = float(np.mean(per_label_ll))
+CRIT E7 — Hard-coded 0.5 threshold in 4 places ignores config + per-task tuning
+Files: evaluator._postprocess (88 96), evaluate_model._postprocess_logits (108 113), prediction_collector._postprocess (61 65), advanced_analysis.postprocess_predictions:108.
+For class-imbalanced binary tasks (misinformation detection ≈ 5–15 % positive), 0.5 yields near-zero recall. Yet the optimized thresholds returned in report["optimal_thresholds"] are never re-applied before metric computation. So the report shows threshold=0.27 next to recall@0.5. Confusing at best, dangerous at worst.
+Fix. Single source of truth — accept thresholds: Dict[task, float|np.ndarray] (loaded from config / fitted on val) and apply consistently in all four _postprocess functions. Remove the threshold=0.5 defaults from the public APIs; require explicit threshold or task (then read TASK_CONFIG[task]["threshold"]).
+________________________________________
+🟡 2. HIGH PRIORITY ISSUES
+HIGH E1 — Multi-task forward pass is N×slow: shared encoder re-run per task
+File: prediction_collector.collect_all_tasks 168 196 and collect_all_tasks_from_loader 232 255 (inner for task in selected_tasks: model(...)).
+The TruthLens model has a shared encoder + per-task heads. Running the encoder K times per batch is O(K) inference cost.
+Fix. Call once per batch, get all heads. If model returns {"logits": {task: tensor}}:
+for batch in dataloader:
+    with autocast_context():
+        out = model(**inputs)                       # single shared pass
+    for task in selected_tasks:
+        logits_buf[task].append(out["logits"][task].detach().cpu().numpy())
+If multi-head API isn’t supported, add it in src/models/. ~K× speedup on eval (K=5–10 here).
+HIGH E2 — Fallback path is per-text Python loop
+File: evaluation_pipeline._collect_via_prediction_service:67 73
+for text in texts:                       # serial, no batching
+    result = prediction_service.predict(text)
+On 10 k samples this is hours instead of minutes. Always batch — even when predict_batch is missing, mini-batch via predict([t1..tN]) chunks.
+Fix.
+for i in range(0, len(texts), batch_size):
+    chunk = texts[i:i + batch_size]
+    results = [prediction_service.predict(t) for t in chunk]   # at minimum threadpool this
+Even better: require predict_batch and warn loudly when absent.
+HIGH E3 — Repeated np.asarray / torch round-trips in _postprocess
+Files: evaluator._postprocess:80 100, prediction_collector._postprocess:42 70, identical pattern in evaluate_model._postprocess_logits.
+We np.asarray → torch.tensor → softmax/sigmoid → .numpy() 3× per task. scipy.special.softmax/expit does it in numpy without a tensor allocation:
+from scipy.special import softmax, expit
+if task_type == "multiclass":
+    probs = softmax(arr, axis=-1)
+    preds = probs.argmax(axis=1).astype(np.int64)
+elif task_type == "binary":
+    probs = expit(arr) if arr.ndim == 1 else softmax(arr, axis=-1)[:, 1]
+    preds = (probs >= threshold).astype(np.int64)
+elif task_type == "multilabel":
+    probs = expit(arr); preds = (probs >= threshold).astype(np.int64)
+~3× faster, no autograd tensor ever created.
+HIGH E4 — extract_confidence definition for binary collapses information
+File: calibration.py:61 75, used by compute_calibration:306.
+For binary 1D probs = P(class=1), confidence is max(p, 1-p) ∈ [0.5, 1]. But the signed probability is what calibration needs (ECE in expected_calibration_error line 193 198 already uses p[:,1] directly). Mixing the two means the confidence returned in the calibration block (used by task_correlation line 192 and the dashboard) is bimodal/half width — and confidence propagates into task_correlation.compute_task_correlation as global_confidence, where the symmetric mapping kills predictive power.
+Fix. Return predicted-class probability for binary in calibration (i.e., p_hat = p if pred==1 else 1-p already equals max(p,1-p) ✓) but also expose prob_positive and feed that into correlation/uncertainty.
+HIGH E5 — _normalize_label_dict requires dict but DataLoader returns tuples in 90 % of paths
+File: prediction_collector.py:204 211. Throws TypeError on (input_ids, attention_mask, labels_tensor) style batches. Make it tolerant: if labels is a tensor and len(tasks)==1 use it directly; otherwise raise with an informative message naming the keys we found.
+HIGH E6 — _collect_via_prediction_service builds ragged arrays silently
+File: evaluation_pipeline.py:75 87
+try:
+    record[key] = np.asarray(values)
+except ValueError:
+    record[key] = values
+When per-sample predictions are length-K vectors (multilabel), np.asarray on a list of lists succeeds and produces (N, K). But if any sample has K=K' (e.g., model returned different label set), it silently produces dtype=object. Then compute_multilabel_metrics does proba_arr.shape[0] and fails 200 lines later with a confusing message.
+Fix. Allocate a typed np.empty((N, K), dtype=float) per task with K read from TASK_CONFIG[task]["num_labels"], fill in place, and assert shape.
+HIGH E7 — multitask summary in Evaluator only covers 3 metrics (drops roc_auc, mcc)
+File: evaluator.py:209 230
+for metric in ("accuracy", "f1_macro", "f1_weighted"):
+ROC AUC, MCC, balanced_accuracy, log_loss should also be weighted-averaged. Iterate over the union of metrics and keep only the numeric ones; no hard-coded list.
+HIGH E8 — Pipeline computes calibration on logits but probs/preds used for metrics are uncalibrated
+File: evaluation_pipeline.py:162 193. evaluate(...) is called with y_proba=probs (raw, untempered). Then compute_calibration returns the tempered probs but they’re thrown away — only summary stats persist. Net: the operating point we report metrics for (preds derived from probs >= 0.5) is never the one whose calibration we report.
+Fix. When fitted temperature is available, recompute probs/preds from apply_temperature(logits, T) before calling evaluate, and return both raw and calibrated metric blocks (metrics_raw, metrics_calibrated).
+HIGH E9 — optimize_multilabel_thresholds(strategy="global") is O(19·N·L) with redundant f1_score calls
+File: threshold_optimizer.py:110 129. Use precision_recall_curve per label vectorized over the candidate grid:
+preds = (probs[:, :, None] >= candidates[None, None, :]).astype(int)   # (N, L, T)
+# vectorize TP/FP/FN per (label, threshold):
+tp = (preds * y_true[:, :, None]).sum(0)       # (L, T)
+fp = (preds * (1 - y_true[:, :, None])).sum(0)
+fn = ((1 - preds) * y_true[:, :, None]).sum(0)
+f1 = 2 * tp / (2 * tp + fp + fn + EPS)         # (L, T)
+macro = f1.mean(axis=0)                        # (T,)
+best_t = candidates[macro.argmax()]
+Memory: O(N·L·T). For N=10k, L=20, T=19 → 3.8M floats = 30 MB, acceptable. Otherwise stream over T.
+HIGH E10 — task_correlation uses winsorize+normalize but loses the sign for multilabel/multiclass columns
+File: task_correlation.py:50 88. We expand each multiclass task into K columns of P(class=k). All K columns sum to 1, so they're collinear, inflating mean correlation and corrupting correlation_statistics. Drop the last class (use K-1 dummy encoding) or compute correlation on the predicted class index / predicted positive probability per task.
+HIGH E11 — mutual_information divides by max abs (destroys scale)
+File: uncertainty.py:128 130. MI is in nats; normalizing by max(|mi|) makes batches non-comparable across runs. Either keep raw nats or normalize by log(K). The current code makes any MI thresholding meaningless across deployments.
+HIGH E12 — error_analysis._top_k_indices for FN uses 1 - confidence argument names confusingly
+File: error_analysis.py:74 77. fn_hard = fn_idx[_top_k_indices(1.0 - fn_conf, k=top_k, largest=True)] — works, but is fragile when _binary_positive_proba returns np.float32 and EPS rounding flips order. Prefer _top_k_indices(fn_conf, k=top_k, largest=False) — semantically equivalent and avoids the subtraction.
+HIGH E13 — Streamlit dashboard reads metrics["confusion"]["matrix"] but report writes metrics["confusion_matrix"]
+File: evaluation_dashboard.py:85 99 vs metrics_engine.py:157 159. Confusion matrix never renders. Either rename in metrics_engine to {"matrix": [...]} or fix the dashboard key.
+HIGH E14 — report_writer._make_serializable truncates at 5,000 then flattens multi-dim arrays
+File: report_writer.py:35 38. For a 100×100 confusion matrix this becomes [10000] flat numbers — caller cannot reconstruct shape. Preserve shape as {"shape": [...], "data": [...]} when truncating, or only truncate at the leaf-list level.
+________________________________________
+⚙️ 3. PIPELINE INTEGRITY
+Found
+•	Two parallel pipelines: EvaluationPipeline.run_evaluation_pipeline (model+texts) and evaluate_and_save → evaluate_tasks (precomputed preds/labels). They diverge on calibration, threshold optimization, error analysis, fairness — none of which are exposed in the saved-model path.
+•	Three near-duplicate _postprocess implementations (evaluator, prediction_collector, evaluate_model, advanced_analysis). Recommend extracting src/evaluation/_postprocess.py and importing into all four.
+•	Order of operations is inconsistent. Pipeline does: collect → eval → threshold → calibration → uncertainty → error → correlation. Evaluator does: collect → metrics → calibration → error → threshold. Threshold should always come before metrics.
+Fix — single canonical order
+val: collect_logits → fit_temperature(T) → fit_thresholds(τ)
+test: collect_logits → apply T → apply τ → metrics → calibration_diagnostics → error_analysis → fairness → uncertainty → correlation → report
+Encode this in a single Evaluator.run(val_data, test_data) and route both EvaluationPipeline and evaluate_and_save through it.
+Coverage gaps
+•	No fairness in any pipeline despite fairness.py being implemented (240 LOC unused).
+•	No reliability-diagram artifact path in evaluate_and_save.
+•	No correlation in EvaluationEngine (used during training).
+________________________________________
+📐 4. METRIC CORRECTNESS
+Metric	Status	Issue
+accuracy / balanced_accuracy	✅	sklearn
+f1 binary/macro/micro/weighted	⚠	wrong average due to is_binary heuristic (CRIT E5)
+mcc	✅	wrapped exception
+roc_auc binary	⚠	falls back to single-class silently when len(np.unique(y_true)) <= 1 (line 187) — returns nothing, no warning
+roc_auc multiclass OvR macro	✅	correct
+log_loss multiclass	✅	sklearn
+log_loss multilabel	❌	hand-rolled, wrong normalization (CRIT E6)
+ECE	✅	vectorized correctly with np.bincount
+Brier	✅	one-hot multiclass version is right
+hamming_loss	✅	sklearn
+confusion_matrix	✅	with explicit labels= (good — fixes class-pruning surprise)
+per_class_f1 / per_label_f1	✅	with labels=
+roc_auc_macro multilabel	⚠	filters all-zero columns (good) but does not filter all-one columns where AUC is also undefined (line 282). Should use np.where((cs > 0) & (cs < n))
+Fix for roc_auc multilabel filter:
+col_sum = y_true_arr.sum(axis=0)
+valid = np.where((col_sum > 0) & (col_sum < y_true_arr.shape[0]))[0]
+Fix for silent roc_auc skip (binary):
+if positive_proba is not None:
+    if len(np.unique(y_true_arr)) > 1:
+        metrics["roc_auc"] = float(roc_auc_score(...))
+    else:
+        logger.warning("roc_auc skipped: y_true has a single class")
+________________________________________
+🎚 5. THRESHOLDING
+•	Tuning leakage: CRIT E1.
+•	No threshold in classification report: thresholds returned in report["optimal_thresholds"] but never applied → metrics use 0.5.
+•	optimize_binary_threshold returns threshold=0.5, score=0.0 when single class (line 38) — silent. Should signal valid=False and reason.
+•	Per-label _score_per_label returns same fallback (line 73). Same fix: explicit failure flag.
+•	No support for cost-sensitive thresholding (e.g. precision >= p_min constrained recall). Add:
+def optimize_constrained(precision, recall, thresholds, *, min_precision=0.8):
+    ok = precision >= min_precision
+    if not ok.any(): return None
+    idx = np.argmax(np.where(ok, recall, -1))
+    return float(thresholds[idx]), float(recall[idx]), float(precision[idx])
+•	Multilabel "global" strategy uses arbitrary 19-point grid — switch to per-label PR-curve thresholds, then take their median as the global candidate set (much higher resolution).
+________________________________________
+🔀 6. MULTI-TASK & AGGREGATION
+•	CRIT E3 — __aggregate__ mixes log_loss with bounded metrics.
+•	_aggregate is unweighted (np.mean(values)). With 5 tasks of size {10000, 50, 50, 50, 50}, the small tasks dominate. Use num_samples weights:
+weights = {t: (per_task[t].get("dataset_stats", {}).get("num_samples") or 1)
+           for t in per_task if t != "__aggregate__"}
+agg[key] = float(np.average(vals, weights=[weights[t] for t in tasks_used]))
+•	Evaluator.multitask weights by num_samples ✓ but only for 3 metrics (HIGH E7).
+•	Per-task metric drift not surfaced. Recommend adding summary["worst_task_f1"] = min((m["f1"] for m in tasks)) and an imbalance_index so dashboards highlight degraded tasks.
+•	No correlation between task losses surfaced even though task_correlation.py exists. Wire:
+report["task_loss_correlation"] = compute_task_correlation(
+    {t: m["log_loss"] for t, m in per_task.items() if "log_loss" in m},
+    method="spearman"
+)
+to detect tasks that hurt each other (negative correlation).
+________________________________________
+⚡ 7. PERFORMANCE & I/O
+Hotspot	LOC	Cost	Fix
+Per-task forward pass	prediction_collector.py:185 194, 246 255	K× encoder	shared encoder, route per-task heads (HIGH E1)
+Per-text predict fallback	evaluation_pipeline.py:67 73	N python calls	batched chunks (HIGH E2)
+Numpy↔torch round-trip in _postprocess (×4 files)	~50 LOC	3× alloc	scipy expit/softmax (HIGH E3)
+optimize_multilabel_thresholds(global)	threshold_optimizer.py:115 128	O(T·L·N) macro f1	vectorized (HIGH E9)
+compute_task_correlation recomputes _winsorize then _normalize per call	task_correlation.py:120 124	2 full DF ops	use rank-based corr directly (scipy.stats.spearmanr once)
+report_writer.save_report writes ~25 PNGs serially	report_writer.py:209 267	I/O bound	parallelize via concurrent.futures.ThreadPoolExecutor(max_workers=4)
+mlflow_tracker.log_evaluation_report writes JSON to NamedTemporaryFile then artifact	line 204 216	extra _make_serializable pass	reuse already-serialized version from save_report and pass via mlflow.log_text
+Reliability diagram opens a fresh matplotlib figure per call	reliability_diagram.py:94 109	leaks if save_path is None (returns None — fine) but creates unused figs	guard if save_path is None: return stats
+Quick wins
+1.	Add LRU cache (functools.lru_cache(maxsize=8)) on _resolve_task_type (task_correlation.py:41) and get_task_type callers.
+2.	Pre-allocate logits_buf lists with len(dataloader) capacity to avoid Python list growth.
+3.	Use torch.from_numpy instead of torch.tensor(..., dtype=...) to avoid copies in _postprocess.
+________________________________________
+🧮 8. NUMERICAL STABILITY
+•	softmax in calibration.py:43 49 ✓ uses log-sum-exp shift.
+•	_softmax in evaluate_model.py:32 35 ✓ same.
+•	sigmoid 1/(1+exp(-x)) — overflows for x < -700. Replace with scipy.special.expit (uses 1/(1+exp(-|x|)) on negative branch).
+•	predictive_entropy clips at EPS=1e-12 ✓ but uses np.log not np.log2 — fine, but document units (nats).
+•	multilabel_uncertainty uses both clipped and unclipped probs (label_entropy clipped, per_label_conf not). Inconsistent — clip both.
+•	compute_calibration falls through to T = None on fit_temperature exception then continues with raw logits (line 292 295) — but downstream apply_temperature is skipped only if T is not None. Path is correct but the warning is at debug level; promote to logger.warning.
+•	expected_calibration_error divides by max(counts.sum(), 1.0) ✓ — but if counts.sum() == 0 returns 0 silently. Should raise ValueError("empty calibration set").
+•	energy_score — std = np.std(energy) or 1.0 is a footgun: np.std==0 could return 0.0 (falsy) so it falls back, but np.std==0 means identical logits → division by zero would give NaN — current behavior is correct only by accident. Make it explicit: std = float(np.std(energy)); std = std if std > EPS else 1.0.
+________________________________________
+🎯 9. CALIBRATION
+Strengths: TemperatureScaler with LBFGS, fit/apply split exists, ECE+Brier+reliability bundled.
+Issues:
+1.	Fit-on-test default (CRIT E2). Default apply_temp_scaling=True + temperature=None triggers it.
+2.	Single scalar T per task — for multilabel with 20 imbalanced labels, vector-temperature (per-label T) is much better. Add:
+class VectorTemperatureScaler(nn.Module):
+    def __init__(self, n_labels): super().__init__(); self.T = nn.Parameter(torch.ones(n_labels))
+    def forward(self, x): return x / self.T.clamp(min=1e-3)
+3.	No Platt scaling alternative — for binary, Platt (logistic) regression on [logit, 1] typically beats T-scaling. Add as a config flag.
+4.	No isotonic baseline. sklearn.isotonic.IsotonicRegression should be the calibration of last resort and reported alongside ECE.
+5.	Reliability diagram is computed twice — once inside compute_calibration via compute_reliability(scaled_probs) (line 334) and again by report_writer._plot_reliability from the same data. Cache the bin stats and reuse.
+6.	fit_temperature LBFGS without bounds — T can become negative. Already guarded by post-check (line 138 140), but starting from T=1 LBFGS sometimes oscillates; add model.temperature.data.clamp_(min=1e-3) inside the closure.
+________________________________________
+⚖ 10. FAIRNESS / EDGE CASES / DEAD CODE
+Fairness
+•	fairness.py is fully unused — neither pipeline calls fairness_report_multi. Wire it in evaluation_pipeline.run_evaluation_pipeline when sensitive_attributes: Dict[str, List] kwarg is provided.
+•	Multilabel/multiclass not supported in per_group_metrics — current heuristic set(np.unique(y_g)).issubset({0,1}) is the same is_binary trap as CRIT E5. Pass explicit task_type.
+•	No statistical-significance gating — small groups produce noisy DPD. Add bootstrap CI:
+def _bootstrap_ci(values, *, n=1000, alpha=0.05):
+    rng = np.random.default_rng(0)
+    samples = [np.mean(rng.choice(values, size=len(values), replace=True)) for _ in range(n)]
+    return float(np.quantile(samples, alpha/2)), float(np.quantile(samples, 1 - alpha/2))
+and report only differences whose CIs don’t overlap.
+Edge cases
+•	Empty test set: compute_classification_metrics raises ValueError("y_true cannot be empty") ✓.
+•	Single class in y_true: roc_auc silently skipped (no warning — fix above).
+•	All probabilities identical: optimize_binary_threshold returns precision_recall_curve of 2 points → fine.
+•	NaNs in probs: not handled anywhere; np.argmax happily returns 0. Add assert np.isfinite(probs).all() at the top of _postprocess.
+•	Multilabel with zero-positive label: ROC-AUC filters ✓; F1 returns 0.0 with zero_division=0 ✓.
+•	Logits dtype float16 from autocast: passed straight to np.asarray(..., dtype=float) ✓ but torch.tensor(arr, dtype=torch.float32) in _postprocess is a needless copy.
+•	evaluation_pipeline._collect_via_prediction_service blows up if result["tasks"][task] is missing for a sample — no KeyError handling. Wrap in try/continue and log per-sample.
+Dead / unused code
+•	fairness.py (240 LOC) — unused.
+•	advanced_analysis.predict_texts.confidence — computed (line 108) but only the unwrapped path uses it; service path returns raw instead.
+•	advanced_analysis.frame_coherence — defined, not imported anywhere.
+•	task_correlation.save_correlation_matrix — never called by either pipeline.
+•	evaluation_dashboard.render_advanced reads report.get("advanced_analysis") — only evaluate_and_save populates this; pipeline doesn’t.
+•	prediction_collector.stream_logits — unused.
+•	mlflow_tracker.log_dataset_info — unused.
+•	EvaluationEngine accepts device kwarg but never forwards it (evaluation_engine.py:53 58 ignores it).
+________________________________________
+🧪 11. CONFIG / CONSISTENCY
+•	5 different ways task_type is resolved: TASK_CONFIG[task]["type"], get_task_type(task), _resolve_task_type, _infer_task_type, ad-hoc shape inference. Cent
+Checkpoint madejust now
+

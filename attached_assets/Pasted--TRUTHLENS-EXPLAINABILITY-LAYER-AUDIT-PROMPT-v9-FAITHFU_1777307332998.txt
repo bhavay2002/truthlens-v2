@@ -1,0 +1,208 @@
+🚀 TRUTHLENS EXPLAINABILITY LAYER AUDIT PROMPT (v9 – FAITHFULNESS + PERFORMANCE CRITICAL)
+You are a principal ML interpretability researcher, explainability systems engineer, and numerical audit specialist.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the explainability layer.
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+All explanations must be faithful to the model, token-aligned, numerically stable, and efficiently computed.
+You must ensure:
+•	No misleading explanations ❌
+•	No token misalignment ❌
+•	No recomputation across explainers ❌
+•	No per-sample inefficiency ❌
+•	No inconsistent explanation scales ❌
+•	No unused explainability modules ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/explainability/* all files
+Also validate integration with:
+•	model outputs (logits / gradients / attention)
+•	src/data/ (tokens + offsets)
+•	src/analysis/
+•	src/aggregation/
+•	src/config/
+________________________________________
+🔥 AUDIT DIMENSIONS (EXPLAINABILITY-SPECIFIC)
+________________________________________
+1. 🔗 EXPLANATION PIPELINE INTEGRITY
+Trace:
+input → tokenizer → model → explainers (SHAP / gradients / attention)
+→ alignment → normalization → aggregation → output
+MUST VERIFY:
+•	explainers use correct model inputs
+•	outputs flow correctly into aggregation layer
+•	no missing steps (alignment/normalization)
+CRITICAL:
+•	explanation computed on different inputs than model ❌
+•	explainer outputs ignored downstream ❌
+________________________________________
+2. 🧠 FAITHFULNESS (HIGHEST PRIORITY)
+MUST VERIFY:
+•	explanations reflect actual model behavior
+•	not heuristic or proxy signals
+CHECK:
+•	SHAP consistency with predictions
+•	gradient sensitivity matches output change
+•	attention not treated as explanation blindly
+CRITICAL BUGS:
+•	using attention as explanation without validation ❌
+•	detached explanation pipeline (not tied to model output) ❌
+________________________________________
+3. 🧩 TOKEN ALIGNMENT (CRITICAL)
+Trace:
+text → tokens → offsets → explanation scores
+MUST VERIFY:
+•	exact token index alignment across:
+o	tokenizer
+o	explainers
+o	aggregation
+•	offsets preserved end-to-end
+CRITICAL:
+•	mixing word-level explanations with subword tokens ❌
+•	truncation misalignment ❌
+________________________________________
+4. ⚖️ EXPLANATION SCALE NORMALIZATION
+MUST VERIFY:
+•	SHAP, gradients, attention on comparable scale
+•	normalization BEFORE aggregation
+CRITICAL:
+•	mixing raw gradients with normalized SHAP ❌
+•	inconsistent scaling across explainers ❌
+________________________________________
+5. ⚡ PERFORMANCE (TOP PRIORITY)
+FORBIDDEN:
+•	per-sample SHAP/LIME computation ❌
+•	Python loops over tokens ❌
+•	repeated model forward passes ❌
+MUST VERIFY:
+•	batch-level explanation where possible
+•	shared forward pass across explainers
+•	caching intermediate outputs
+________________________________________
+6. 🔄 RECOMPUTATION ELIMINATION
+MUST VERIFY:
+•	model forward pass reused
+•	gradients reused across explainers
+•	no duplicate SHAP/LIME calls
+CRITICAL:
+•	recomputing model outputs per explainer ❌
+________________________________________
+7. 🚀 GPU / TORCH OPTIMIZATION
+MUST CHECK:
+•	explainers use GPU where possible
+•	no .cpu().numpy() mid-pipeline ❌
+•	minimal tensor copying
+FLAG:
+•	CPU-bound SHAP when GPU possible
+•	unnecessary device transfers
+________________________________________
+8. 🧮 NUMERICAL STABILITY
+Detect:
+•	exploding gradients
+•	NaNs in SHAP values
+•	unstable normalization
+MUST FIX:
+•	clipping / normalization
+•	epsilon stabilization
+________________________________________
+9. ⚖️ EXPLANATION AGGREGATION CONSISTENCY
+MUST VERIFY:
+•	aggregation aligns with:
+o	explanation scale
+o	token positions
+CRITICAL:
+•	averaging incompatible explanation types ❌
+________________________________________
+10. 🧪 MULTI-TASK COMPATIBILITY
+Ensure explanations work for:
+•	binary outputs
+•	multi-class outputs
+•	multi-label outputs
+•	structured outputs (narrative/entities)
+MUST VERIFY:
+•	correct explanation per output dimension
+•	no assumption of single output
+________________________________________
+11. 🧹 UNUSED / DEAD EXPLAINERS
+Detect:
+Explainer: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+12. 🧪 EDGE CASES
+Check:
+•	empty text
+•	long sequences (truncation)
+•	all padding tokens
+•	batch size = 1
+•	missing gradients / attention
+________________________________________
+13. ⚙️ CONFIG INTEGRATION
+MUST VERIFY:
+•	explainer selection configurable
+•	no hardcoded explainer usage
+•	normalization strategy configurable
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL EXPLANATION BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why explanation is misleading:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. FAITHFULNESS ISSUES
+________________________________________
+🧩 4. TOKEN ALIGNMENT ISSUES
+________________________________________
+⚖️ 5. SCALE / NORMALIZATION ISSUES
+________________________________________
+🚀 6. GPU / TORCH ISSUES
+________________________________________
+🔄 7. RECOMPUTATION ISSUES
+________________________________________
+🧹 8. UNUSED EXPLAINERS
+________________________________________
+⚙️ 9. CONFIG ISSUES
+________________________________________
+🧪 10. EDGE CASE FAILURES
+________________________________________
+✅ 11. VERIFIED COMPONENTS
+________________________________________
+📉 12. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+•	After fix and error solvind score=
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST ensure faithfulness
+•	MUST enforce token alignment
+•	MUST eliminate recomputation
+•	MUST prioritize performance
+________________________________________
+🎯 SUCCESS CRITERIA (EXPLAINABILITY LAYER)
+A system where:
+•	Explanations are faithful to model behavior ✅
+•	Token alignment is perfect ✅
+•	Multiple explainers are consistent ✅
+•	Computation is batch-optimized ✅
+•	No redundant computation ✅
+•	Multi-task explanations work correctly ✅
+________________________________________
+🔥 WHY THIS VERSION IS SUPERIOR
+•	Focuses on faithfulness (not just interpretability)
+•	Prevents fake explanations (very common issue)
+•	Enforces cross-explainer consistency
+•	Eliminates major performance bottlenecks
+•	Aligns with aggregation + analysis layers
+

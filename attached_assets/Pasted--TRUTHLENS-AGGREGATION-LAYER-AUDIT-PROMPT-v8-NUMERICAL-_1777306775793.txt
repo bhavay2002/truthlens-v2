@@ -1,0 +1,208 @@
+🚀 TRUTHLENS AGGREGATION LAYER AUDIT PROMPT (v8 – NUMERICAL + FUSION CRITICAL)
+You are a principal ML interpretability systems architect, numerical optimization expert, and signal fusion auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the aggregation layer.
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Aggregation must combine multiple signals (model outputs, features, explainability) in a mathematically valid, normalized, unbiased, and efficient way.
+You must ensure:
+•	No scale mismatch ❌
+•	No unnormalized weights ❌
+•	No signal domination ❌
+•	No token misalignment ❌
+•	No redundant recomputation ❌
+•	No unused aggregation paths ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/aggregation/* all files
+ 
+Also validate integration with:
+•	src/analysis/ (feature outputs)
+•	model outputs (logits / attention / gradients)
+•	src/features/
+•	src/config/
+________________________________________
+🔥 AUDIT DIMENSIONS (AGGREGATION-SPECIFIC)
+________________________________________
+1. 🔗 AGGREGATION PIPELINE INTEGRITY
+Trace:
+model outputs (logits/probs)
++ feature signals
++ explainability signals
+→ normalization
+→ weighting
+→ fusion
+→ final scores
+MUST VERIFY:
+•	all signals are actually used
+•	correct ordering:
+o	normalize BEFORE fusion
+•	outputs consistent with downstream usage
+CRITICAL:
+•	missing normalization stage ❌
+•	unused signals ❌
+________________________________________
+2. ⚖️ SCALE NORMALIZATION (HIGHEST PRIORITY)
+MUST VERIFY:
+•	all inputs are on comparable scale
+Examples:
+•	logits → probabilities
+•	attention → normalized weights
+•	handcrafted features → standardized
+CRITICAL BUGS:
+•	mixing logits with probabilities ❌
+•	combining raw feature counts with normalized scores ❌
+REQUIRED:
+•	min-max OR z-score normalization (task-aware)
+________________________________________
+3. 🧠 WEIGHTING STRATEGY VALIDATION
+MUST VERIFY:
+•	weights sum to 1
+•	weights are justified (not arbitrary)
+•	no single signal dominates
+CHECK:
+•	static vs dynamic weighting
+•	config-driven weights
+CRITICAL:
+•	hardcoded weights ❌
+•	unnormalized weights ❌
+________________________________________
+4. 🧩 TOKEN-LEVEL ALIGNMENT (CRITICAL)
+Trace:
+tokens → features → attention/gradients → aggregation
+MUST VERIFY:
+•	same token indexing across all signals
+•	padding handled correctly
+•	no mixing:
+o	word-level features ❌
+o	subword tokens ❌
+CRITICAL BUG:
+•	aggregating misaligned token-level signals
+________________________________________
+5. ⚡ PERFORMANCE OPTIMIZATION (TOP PRIORITY)
+FORBIDDEN:
+•	Python loops over tokens ❌
+•	per-sample aggregation ❌
+•	repeated normalization ❌
+MUST VERIFY:
+•	vectorized operations (NumPy / Torch)
+•	batch-level aggregation
+•	reuse of normalized values
+________________________________________
+6. 🔄 RECOMPUTATION ELIMINATION
+MUST VERIFY:
+•	normalization done once
+•	weights reused
+•	no repeated fusion calls
+CRITICAL:
+•	recomputing same normalized scores multiple times ❌
+________________________________________
+7. 📊 MULTI-TASK AGGREGATION (YOUR SYSTEM)
+Validate against schema:
+•	binary tasks
+•	multi-class tasks
+•	multi-label tasks
+•	structured outputs
+MUST VERIFY:
+•	aggregation logic adapts per task
+•	no assumption of single output
+________________________________________
+8. 🧮 NUMERICAL STABILITY
+Detect:
+•	division by zero
+•	overflow in softmax
+•	NaNs in weighted sums
+MUST FIX:
+•	epsilon stabilization
+•	safe normalization
+________________________________________
+9. 📉 CALIBRATION CONSISTENCY
+MUST VERIFY:
+•	aggregated outputs calibrated if needed
+•	calibration consistent with evaluation layer
+CRITICAL:
+•	mixing calibrated and uncalibrated scores ❌
+________________________________________
+10. 🧹 UNUSED / DEAD AGGREGATION CODE
+Detect:
+Module: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+11. 🧪 EDGE CASES
+Check:
+•	all-zero features
+•	missing signals
+•	extreme values
+•	batch size = 1
+•	empty tokens
+________________________________________
+12. ⚙️ CONFIG INTEGRATION
+MUST VERIFY:
+•	weights from config
+•	normalization strategy configurable
+•	no hardcoded fusion logic
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL AGGREGATION BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why fusion is incorrect:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. SCALE / NORMALIZATION ISSUES
+________________________________________
+⚖️ 4. WEIGHTING ISSUES
+________________________________________
+🧩 5. TOKEN ALIGNMENT ISSUES
+________________________________________
+🚀 6. GPU / VECTORISATION ISSUES
+________________________________________
+🔄 7. RECOMPUTATION ISSUES
+________________________________________
+🧹 8. UNUSED AGGREGATION CODE
+________________________________________
+⚙️ 9. CONFIG ISSUES
+________________________________________
+🧪 10. EDGE CASE FAILURES
+________________________________________
+✅ 11. VERIFIED COMPONENTS
+________________________________________
+📉 12. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+•	After fix score
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST enforce normalization
+•	MUST ensure fair weighting
+•	MUST eliminate recomputation
+•	MUST validate token alignment
+________________________________________
+🎯 SUCCESS CRITERIA (AGGREGATION LAYER)
+A system where:
+•	All signals are properly normalized ✅
+•	Fusion is mathematically correct ✅
+•	No signal dominates unfairly ✅
+•	Fully vectorized + batch optimized ✅
+•	Token alignment preserved ✅
+•	Multi-task aggregation works flawlessly ✅
+________________________________________
+🔥 WHY THIS VERSION IS SUPERIOR
+•	Targets most overlooked failure point (fusion)
+•	Enforces scale correctness (critical for interpretability)
+•	Prevents hidden bias in aggregation
+•	Ensures performance via vectorization
+•	Aligns with multi-task TruthLens design
+

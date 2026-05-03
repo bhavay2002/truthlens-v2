@@ -1,0 +1,146 @@
+You are a senior ML systems engineer and technical documentation expert.
+
+Your task is to generate a COMPLETE, PRODUCTION-GRADE documentation file named `data.md` for the `src/data` folder of a machine learning repository.
+
+## 🎯 Objective
+Create a highly structured, deeply informative, and easy-to-understand document so that any new developer or ML engineer can:
+- Fully understand the purpose of the data layer
+- Know what each file does
+- Understand how data flows through the system
+- Identify dependencies and design decisions
+- Debug or extend the system confidently
+
+---
+
+## 📁 Scope
+Analyze ALL files inside:
+src/data/
+
+Include:
+- Every Python file
+- Subfolders (if any)
+- Utility/helper modules used within this folder
+
+---
+
+## 📚 Required Output Structure (STRICT)
+
+### 1. Overview
+- Purpose of the `src/data` folder
+- Role in the overall ML pipeline
+- Key responsibilities (ingestion, validation, transformation, etc.)
+
+---
+
+### 2. Folder Architecture
+- Tree structure of `src/data`
+- Brief explanation of each file/module
+
+Example:
+src/data/
+├── load_data.py        → Handles raw data ingestion
+├── clean_data.py       → Data cleaning & preprocessing
+...
+
+---
+
+### 3. End-to-End Data Flow
+- Step-by-step explanation of how data moves through this folder
+- From raw input → final processed dataset
+- Mention function calls and file interactions
+- Clearly describe pipeline order
+
+---
+
+### 4. File-by-File Deep Dive
+For EACH file:
+
+#### File: <filename.py>
+
+**Purpose**
+- Why this file exists
+
+**Key Functions / Classes**
+For each function:
+- Function name
+- Input parameters (types + meaning)
+- Output (type + structure)
+- Internal logic (step-by-step, not vague)
+- Edge cases handled
+
+**Dependencies**
+- Internal (other src modules)
+- External libraries
+
+**Performance Notes**
+- Any vectorization, batching, memory optimization, etc.
+
+---
+
+### 5. Data Contracts & Schemas
+- Expected input data format (CSV, JSON, Parquet, etc.)
+- Schema definitions (columns, types, constraints)
+- Output data format after processing
+
+---
+
+### 6. Config Integration
+- How this folder uses config files (src/config or elsewhere)
+- Parameters controlling behavior (paths, thresholds, flags)
+
+---
+
+### 7. Error Handling & Validation
+- Data validation checks
+- Exception handling strategy
+- Logging practices
+
+---
+
+### 8. Optimization & Efficiency
+- GPU usage (if any)
+- Lazy loading / streaming
+- Parallel processing
+- Memory management techniques
+
+---
+
+### 9. Extensibility Guide
+- How to safely add a new data processing step
+- How to modify existing logic without breaking pipeline
+
+---
+
+### 10. Common Pitfalls / Issues
+- Known bugs or risks
+- Data leakage risks
+- Schema mismatch problems
+
+---
+
+### 11. Example Usage
+- Minimal working example showing how to run the data pipeline
+
+---
+
+## ⚠️ Constraints
+- DO NOT give generic explanations
+- DO NOT skip any file
+- DO NOT assume undocumented behavior—derive from code
+- Be precise, technical, and implementation-aware
+
+---
+
+## 💡 Style Guidelines
+- Use clean markdown formatting
+- Use bullet points, tables, and code blocks where useful
+- Keep explanations crisp but deep
+- Prefer clarity over verbosity
+
+---
+
+## 🚀 Goal
+By reading `data.md`, a new engineer should NOT need to read the code to understand:
+- What happens in `src/data`
+- How to use it
+- How to modify it safely

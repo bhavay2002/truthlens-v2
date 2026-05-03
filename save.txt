@@ -1,0 +1,191 @@
+Column Names:
+title
+text
+bias_label
+ideology_label
+propaganda_label
+frame
+CO
+EC
+HI
+MO
+RE
+hero
+villain
+victim
+hero_entities
+villain_entities
+victim_entities
+emotion_0
+emotion_1
+emotion_2
+emotion_3
+emotion_4
+emotion_5
+emotion_6
+emotion_7
+emotion_8
+emotion_9
+emotion_10
+emotion_11
+emotion_12
+emotion_13
+emotion_14
+emotion_15
+emotion_16
+emotion_17
+emotion_18
+emotion_19
+dataset
+
+Token Statistics
+-----------------------
+Max tokens: 864
+Min tokens: 4
+Average tokens: 213.86
+Median tokens: 151.0
+
+Token Length Distribution
+-----------------------
+0-64       :  14886 samples (45.30%)
+65-128     :   1347 samples (4.10%)
+129-256    :    876 samples (2.67%)
+257-384    :   3932 samples (11.97%)
+385-512    :  11773 samples (35.83%)
+513-768    :     45 samples (0.14%)
+769-1024   :      1 samples (0.00%)
+
+Emotion	ID removed
+desire	8
+fear	14
+remorse	24
+embarrassment	12
+nervousness	19
+relief	23
+pride	21
+grief	16
+
+
+
+GOEMOTIONS_LABELS: Dict[int, str] = {
+    0: "admiration",
+    1: "amusement",
+    2: "anger",
+    3: "annoyance",
+    4: "approval",
+    5: "caring",
+    6: "confusion",
+    7: "curiosity",
+    8: "desire",
+    9: "disappointment",
+    10: "disapproval",
+    11: "disgust",
+    12: "embarrassment",
+    13: "excitement",
+    14: "fear",
+    15: "gratitude",
+    16: "grief",
+    17: "joy",
+    18: "love",
+    19: "nervousness",
+    20: "optimism",
+    21: "pride",
+    22: "realization",
+    23: "relief",
+    24: "remorse",
+    25: "sadness",
+    26: "surprise",
+    27: "neutral"
+}
+
+
+
+Final Label Index Mapping (Recommended)
+
+After cleaning, remap labels 0–19.
+
+ ID	Emotion
+0	neutral
+1	admiration
+2	approval
+3	gratitude
+4	annoyance
+5	amusement
+6	curiosity
+7	disapproval
+8	love
+9	optimism
+10	anger
+11	joy
+12	confusion
+13	sadness
+14	disappointment
+15	realization
+16	caring
+17	surprise
+18	excitement
+19	disgust
+
+
+
+SemEval Emotion Distribution:
+
+         emotion  count
+4            joy   4266
+2        disgust   4017
+0          anger   3956
+6       optimism   3407
+8        sadness   3228
+3           fear   1844
+1   anticipation   1513
+5           love   1329
+7      pessimism   1268
+9       surprise    559
+10         trust    546
+PS C:\Users\bhava\OneDrive\Desktop\demo.cpp\Truthlens Ai> 
+
+
+emotion_map = {
+    "anger": 10,
+    "anticipation": 6,
+    "disgust": 19,
+    "fear": 12,
+    "joy": 11,
+    "love": 8,
+    "optimism": 9,
+    "pessimism": 14,
+    "sadness": 13,
+    "surprise": 17,
+    "trust": 2
+}
+
+
+| New Emotion | Comes From Old | Value  |
+| ----------- | -------------- | ------ |
+| emotion_0   | emotion_2      | 0.0517 |
+| emotion_1   | emotion_3      | 0.0000 |
+| emotion_2   | emotion_4      | 0.0000 |
+| emotion_3   | emotion_5      | 0.0000 |
+| emotion_4   | emotion_6      | 0.1430 |
+| emotion_5   | emotion_7      | 0.0000 |
+| emotion_6   | emotion_8      | 0.1254 |
+| emotion_7   | emotion_9      | 0.3216 |
+| emotion_8   | emotion_10     | 0.3718 |
+| emotion_9   | emotion_11     | 0.4023 |
+| emotion_10  | emotion_12     | 0.1736 |
+
+
+| New ID     | Comes From Old ID | Old Emotion | New Emotion Label |
+| ---------- | ----------------- | ----------- | ----------------- |
+| emotion_0  | 2                 | approval    | approval          |
+| emotion_1  | 3                 | gratitude   | gratitude         |
+| emotion_2  | 4                 | annoyance   | annoyance         |
+| emotion_3  | 5                 | amusement   | amusement         |
+| emotion_4  | 6                 | curiosity   | curiosity         |
+| emotion_5  | 7                 | disapproval | disapproval       |
+| emotion_6  | 8                 | love        | love              |
+| emotion_7  | 9                 | optimism    | optimism          |
+| emotion_8  | 10                | anger       | anger             |
+| emotion_9  | 11                | joy         | joy               |
+| emotion_10 | 12                | confusion   | confusion         |
+

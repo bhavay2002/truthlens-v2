@@ -1,0 +1,231 @@
+Good—this error actually clarifies everything:
+
+```text
+error: unrecognized arguments: --evaluate --labels_file
+```
+
+👉 That means **your CLI does NOT support those flags at all**.
+So the earlier assumption (“use `--evaluate`”) does **not apply to your current codebase**.
+
+---
+
+# 🧠 What this means (important correction)
+
+Your system uses:
+
+```bash
+--enable-evaluation
+```
+
+NOT:
+
+```bash
+--evaluate ❌
+--labels_file ❌
+```
+
+---
+
+# 🚨 Real Issue (precise now)
+
+Even though you run:
+
+```bash
+--enable-evaluation
+```
+
+👉 your logs still show:
+
+```text
+evaluation enabled — call analyze_batch(texts, labels=...)
+Per-article analyse() will NOT invoke evaluator
+```
+
+📌 This is the key.
+
+---
+
+# 🎯 Final Root Cause
+
+> ✅ Evaluation is ENABLED
+> ❌ But NOT TRIGGERED
+
+Because:
+
+* You are calling:
+
+  ```python
+  analyse(text)   # single text
+  ```
+
+* But evaluator only runs on:
+
+```python
+analyze_batch(texts, labels=...)
+```
+
+---
+
+# 🔍 Why CLI isn’t enough
+
+Your CLI flag:
+
+```bash
+--enable-evaluation
+```
+
+ONLY does:
+
+```python
+self.enable_evaluation = True
+```
+
+👉 It does **NOT automatically supply labels**
+
+---
+
+# ✅ Correct Fix (based on your system)
+
+You must modify **code**, not CLI.
+
+---
+
+## 🔧 Option 1 — Modify main.py (recommended)
+
+Find where pipeline is called:
+
+```python
+pipeline.analyse(text)
+```
+
+---
+
+### Replace with:
+
+```python
+texts = ["text1", "text2", "text3"]
+
+labels = [
+    {"bias": 1, "emotion": 3, "propaganda": 0},
+    {"bias": 0, "emotion": 2, "propaganda": 1},
+    {"bias": 1, "emotion": 5, "propaganda": 0}
+]
+
+results = pipeline.analyze_batch(texts, labels=labels)
+```
+
+---
+
+## 🔧 Option 2 — Minimal test hack
+
+Just to verify evaluation works:
+
+```python
+results = pipeline.analyze_batch(
+    texts=texts,
+    labels=[{} for _ in texts]  # dummy labels
+)
+```
+
+👉 If metrics change → pipeline working
+
+---
+
+## 🔧 Option 3 — Add CLI support (clean solution)
+
+If you want proper CLI like:
+
+```bash
+--labels_file test.json
+```
+
+You need to add:
+
+```python
+parser.add_argument("--labels_file", type=str)
+```
+
+And then:
+
+```python
+if args.labels_file:
+    labels = load_labels(args.labels_file)
+```
+
+---
+
+# ⚠️ Why your metrics are still 0.0
+
+Because this condition is never satisfied:
+
+```python
+if self.enable_evaluation and labels is not None:
+```
+
+👉 `labels = None` → skip → metrics = 0
+
+---
+
+# 🧪 Quick sanity check (DO THIS)
+
+Add this print:
+
+```python
+print("LABELS:", labels)
+```
+
+👉 If output is:
+
+```text
+LABELS: None
+```
+
+You found your issue.
+
+---
+
+# 💡 Clean Mental Model
+
+| Flag                  | What it does              |
+| --------------------- | ------------------------- |
+| `--enable-evaluation` | turns ON evaluation logic |
+| labels input          | actually RUNS evaluation  |
+
+👉 You only did the first half.
+
+---
+
+# 🚀 Final Answer
+
+* ❌ Your CLI doesn’t support `--evaluate`
+* ✅ You correctly used `--enable-evaluation`
+* ❌ But you never passed labels
+* 👉 So evaluation never runs
+
+---
+
+# 🎯 What you must do
+
+👉 Call:
+
+```python
+pipeline.analyze_batch(texts, labels=labels)
+```
+
+NOT:
+
+```python
+pipeline.analyse(text)
+```
+
+---
+
+# If you want next step
+
+I can:
+
+* modify your `main.py` to fully support labels via CLI
+* generate correct label schema for all 6 tasks
+* wire full train → test automation
+
+Just say 👍

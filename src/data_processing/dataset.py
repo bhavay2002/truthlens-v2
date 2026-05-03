@@ -1,0 +1,412 @@
+"""
+TruthLens datasets (pre-tokenized, contract-driven).
+
+Design:
+- All tokenization happens ONCE in __init__ (no per-sample tokenizer calls).
+- Texts/labels are stored as numpy arrays / lists for O(1) __getitem__ access.
+- Optionally returns offset_mapping for downstream token-alignment / explainability.
+- Label column names come from the data_contracts module (single source of truth).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import List, Dict, Any, Optional
+
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+
+logger = logging.getLogger(__name__)
+
+TASK_ORDER = ["bias", "emotion", "propaganda", "ideology", "narrative"]
+
+
+def _safe_series(df: pd.DataFrame, columns: List[str], default: float = 0.0) -> np.ndarray:
+    vals = []
+    for col in columns:
+        if col in df.columns:
+            vals.append(df[col].fillna(default).astype(float).to_numpy())
+        else:
+            vals.append(np.full(len(df), default, dtype=np.float32))
+    return np.vstack(vals).T if vals else np.zeros((len(df), 0), dtype=np.float32)
+
+
+def _minmax_01(values: np.ndarray) -> np.ndarray:
+    if values.size == 0:
+        return values.astype(np.float32)
+    vmin = np.nanmin(values)
+    vmax = np.nanmax(values)
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+        return np.zeros_like(values, dtype=np.float32)
+    return ((values - vmin) / (vmax - vmin)).astype(np.float32)
+
+
+def _has_any(df: pd.DataFrame, columns: List[str]) -> np.ndarray:
+    if not columns:
+        return np.zeros(len(df), dtype=np.int64)
+    present = [c for c in columns if c in df.columns]
+    if not present:
+        return np.zeros(len(df), dtype=np.int64)
+    mat = df[present].fillna(0).to_numpy(dtype=np.float32)
+    return (np.any(mat > 0, axis=1)).astype(np.int64)
+
+
+# =========================================================
+# BASE DATASET
+# =========================================================
+
+class BaseTextDataset(Dataset):
+    """
+    Base dataset: pre-tokenizes the entire text column up-front.
+
+    Args:
+        df: dataframe (must contain `text_col`)
+        tokenizer: HuggingFace tokenizer (fast tokenizer required if
+            ``return_offsets_mapping=True``)
+        text_col: text column name
+        max_length: max tokens per sample (truncation only — padding done in
+            the collate step)
+        return_offsets_mapping: if True, store per-sample offset_mapping for
+            char-level alignment in explainability layers
+        log_truncation: if True, log how many samples were truncated
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        tokenizer,
+        *,
+        text_col: str = "text",
+        max_length: int = 512,
+        return_offsets_mapping: bool = False,
+        log_truncation: bool = True,
+    ):
+        if text_col not in df.columns:
+            raise ValueError(
+                f"Missing text column '{text_col}' (have: {list(df.columns)})"
+            )
+
+        self.tokenizer = tokenizer
+        self.text_col = text_col
+        self.max_length = max_length
+        self.return_offsets_mapping = return_offsets_mapping
+        self.pad_token_id = (
+            tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+        )
+
+        # ----- pre-tokenize whole column -----
+        texts = df[text_col].astype(str).tolist()
+
+        if return_offsets_mapping and not getattr(tokenizer, "is_fast", False):
+            raise ValueError(
+                "return_offsets_mapping=True requires a fast tokenizer "
+                "(PreTrainedTokenizerFast)."
+            )
+
+        enc = tokenizer(
+            texts,
+            truncation=True,
+            padding=False,
+            max_length=max_length,
+            return_attention_mask=True,
+            return_offsets_mapping=return_offsets_mapping,
+            return_length=True,
+        )
+
+        ids_lists: List[List[int]] = enc["input_ids"]
+        attn_lists: List[List[int]] = enc["attention_mask"]
+        om_lists: Optional[List[List[List[int]]]] = (
+            enc.get("offset_mapping") if return_offsets_mapping else None
+        )
+
+        # =====================================================
+        # FLATTEN STORAGE (PERF-D2)
+        #
+        # ~25M Python ints for a 100k × 256 corpus = ~200 MB of pure
+        # CPython object overhead, plus full GC scans, plus a copy
+        # storm whenever a DataLoader worker forks. Storing one
+        # ``int32`` ids array + one ``int64`` offsets array is
+        # ~3-5× lower RSS, ~30% faster ``__getitem__``, and the
+        # arrays are shared by reference across worker forks.
+        # =====================================================
+        n = len(ids_lists)
+        lengths = np.fromiter((len(x) for x in ids_lists), dtype=np.int64, count=n)
+        self._offsets = np.zeros(n + 1, dtype=np.int64)
+        np.cumsum(lengths, out=self._offsets[1:])
+        total = int(self._offsets[-1])
+
+        self._ids_flat = np.empty(total, dtype=np.int32)
+        self._attn_flat = np.empty(total, dtype=np.int8)
+        cursor = 0
+        for ids, attn in zip(ids_lists, attn_lists):
+            k = len(ids)
+            self._ids_flat[cursor:cursor + k] = ids
+            self._attn_flat[cursor:cursor + k] = attn
+            cursor += k
+
+        if om_lists is not None:
+            self._om_flat: Optional[np.ndarray] = np.empty((total, 2), dtype=np.int64)
+            cursor = 0
+            for om in om_lists:
+                k = len(om)
+                self._om_flat[cursor:cursor + k] = om
+                cursor += k
+        else:
+            self._om_flat = None
+
+        # truncation diagnostics — use the canonical HuggingFace signal
+        # ``encodings[i].overflowing`` when available (TOK-D2). The old
+        # ``L >= max_length`` heuristic over-counted samples that fit
+        # exactly. Fall back to the heuristic for slow tokenizers.
+        if log_truncation:
+            n_truncated = 0
+            encodings = getattr(enc, "encodings", None)
+            if encodings is not None:
+                n_truncated = sum(1 for e in encodings if getattr(e, "overflowing", None))
+            else:
+                fallback_lengths = enc.get("length") or [len(x) for x in ids_lists]
+                n_truncated = sum(1 for L in fallback_lengths if L >= max_length)
+            if n_truncated > 0:
+                logger.warning(
+                    "Tokenizer truncation | samples=%d | truncated=%d (%.1f%%) | max_length=%d",
+                    len(texts),
+                    n_truncated,
+                    100.0 * n_truncated / max(len(texts), 1),
+                    max_length,
+                )
+
+        self._n = n
+
+    def __len__(self) -> int:
+        return self._n
+
+    # subclasses override __getitem__ — base helper returns the encoded inputs
+    def _encoded_inputs(self, idx: int) -> Dict[str, torch.Tensor]:
+        s = int(self._offsets[idx])
+        e = int(self._offsets[idx + 1])
+        item: Dict[str, torch.Tensor] = {
+            # .astype(int64) returns a fresh array; from_numpy then takes
+            # ownership and yields a tensor without a second copy.
+            "input_ids": torch.from_numpy(self._ids_flat[s:e].astype(np.int64, copy=True)),
+            "attention_mask": torch.from_numpy(self._attn_flat[s:e].astype(np.int64, copy=True)),
+        }
+        if self._om_flat is not None:
+            item["offset_mapping"] = torch.from_numpy(
+                self._om_flat[s:e].astype(np.int64, copy=True)
+            )
+        return item
+
+
+# =========================================================
+# CLASSIFICATION DATASET (bias, ideology, propaganda)
+# =========================================================
+
+class ClassificationDataset(BaseTextDataset):
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        tokenizer,
+        *,
+        label_col: str,
+        num_classes: int,
+        task_name: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(df, tokenizer, **kwargs)
+
+        if label_col not in df.columns:
+            raise ValueError(
+                f"Missing label column '{label_col}' (have: {list(df.columns)})"
+            )
+
+        self.label_col = label_col
+        self.num_classes = num_classes
+        self.task_name = task_name or label_col
+        self.task_mask = torch.ones(len(df), dtype=torch.long)
+        self.task_mask_vector = torch.zeros((len(df), len(TASK_ORDER)), dtype=torch.long)
+        if self.task_name in TASK_ORDER:
+            self.task_mask_vector[:, TASK_ORDER.index(self.task_name)] = 1
+
+        self.derived_features = self._build_derived_features(df)
+
+        # vectorize labels once
+        labels = df[label_col].to_numpy()
+        if pd.isna(labels).any():
+            raise ValueError(
+                f"NaN labels in column '{label_col}' — clean/validate first."
+            )
+        self._labels = labels.astype(np.int64)
+
+    def _build_derived_features(self, df: pd.DataFrame) -> torch.Tensor:
+        bias = df["bias_label"].fillna(0).astype(float).to_numpy() if "bias_label" in df.columns else np.zeros(len(df))
+        emotion_cols = [c for c in df.columns if c.startswith("emotion_")]
+        emotion = _safe_series(df, emotion_cols)
+        emotion_intensity = emotion.mean(axis=1) if emotion.size else np.zeros(len(df))
+        propaganda = df["propaganda_label"].fillna(0).astype(float).to_numpy() if "propaganda_label" in df.columns else np.zeros(len(df))
+        narrative_cols = [c for c in ("hero", "villain", "victim") if c in df.columns]
+        narrative = _safe_series(df, narrative_cols)
+        narrative_conflict = narrative.std(axis=1) if narrative.size else np.zeros(len(df))
+        ideology = df["ideology_label"].fillna(0).astype(float).to_numpy() if "ideology_label" in df.columns else np.zeros(len(df))
+        dominant_emotion = emotion.max(axis=1) if emotion.size else np.zeros(len(df))
+        feats = np.stack(
+            [
+                _minmax_01(bias * emotion_intensity),
+                _minmax_01(propaganda * narrative_conflict),
+                _minmax_01(ideology * dominant_emotion),
+            ],
+            axis=1,
+        )
+        return torch.from_numpy(feats)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        item = self._encoded_inputs(idx)
+        item["labels"] = torch.as_tensor(self._labels[idx], dtype=torch.long)
+        item["task"] = self.task_name
+        item["task_mask"] = self.task_mask_vector[idx]
+        item["derived_features"] = self.derived_features[idx]
+        return item
+
+
+# =========================================================
+# MULTILABEL DATASET (frame, narrative, emotion)
+# =========================================================
+
+class MultiLabelDataset(BaseTextDataset):
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        tokenizer,
+        *,
+        label_cols: List[str],
+        task_name: str,
+        valid_label_indices: Optional[List[int]] = None,
+        **kwargs,
+    ):
+        super().__init__(df, tokenizer, **kwargs)
+
+        missing = [c for c in label_cols if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Missing multilabel columns {missing} (have: {list(df.columns)})"
+            )
+
+        # Preserve the contract's full column list so downstream code
+        # that wants to map (sliced position) → (original column name)
+        # — e.g. logging, metrics naming, prediction-time lookup —
+        # can still do so even after degenerate columns are dropped.
+        self.original_label_cols = list(label_cols)
+        if valid_label_indices is None:
+            self.label_cols = list(label_cols)
+            self.valid_label_indices: List[int] = list(range(len(label_cols)))
+        else:
+            n = len(label_cols)
+            kept = sorted({int(i) for i in valid_label_indices})
+            for i in kept:
+                if not (0 <= i < n):
+                    raise ValueError(
+                        f"valid_label_indices out of range for {n} columns: {i}"
+                    )
+            self.valid_label_indices = kept
+            self.label_cols = [label_cols[i] for i in kept]
+        self.task_name = task_name
+        self.task_mask = torch.ones(len(df), dtype=torch.long)
+        self.task_mask_vector = torch.zeros((len(df), len(TASK_ORDER)), dtype=torch.long)
+        if self.task_name in TASK_ORDER:
+            self.task_mask_vector[:, TASK_ORDER.index(self.task_name)] = 1
+        self.derived_features = self._build_derived_features(df)
+
+        if not self.label_cols:
+            # All columns degenerate. Refuse to build a dataset with
+            # zero label width rather than silently producing a model
+            # head that learns nothing.
+            raise ValueError(
+                f"{task_name}: no usable multilabel columns after filtering "
+                f"(original={list(label_cols)}, kept_indices={self.valid_label_indices})"
+            )
+
+        matrix = df[self.label_cols].to_numpy(dtype=np.float32)
+        if np.isnan(matrix).any():
+            raise ValueError(
+                f"NaN values in multilabel columns {self.label_cols} — clean first."
+            )
+
+        # EDGE-CASE (audit §9, "non-binary multilabel value e.g. 0.5"):
+        # ``data_validator._validate_multilabel`` rejects fractional
+        # values when ``enforce_binary_multilabel=True``, but ``MultiLabelDataset``
+        # historically stored whatever it was handed and let BCE consume
+        # it as a soft label — an inconsistency that depended on whether
+        # the validator ran in strict mode. Make the policy explicit:
+        # values in the closed [0, 1] interval are accepted (BCE-with-
+        # logits-loss handles them as soft targets); anything outside
+        # that range is a real bug and is rejected here regardless of
+        # validator strictness, so we never silently train on -1 / 1.5
+        # garbage.
+        if matrix.size and (matrix.min() < 0.0 or matrix.max() > 1.0):
+            bad = ((matrix < 0.0) | (matrix > 1.0)).sum()
+            raise ValueError(
+                f"Multilabel values outside [0, 1] in {self.label_cols} "
+                f"({bad} entries). Soft labels are supported, but values "
+                "must be in [0, 1] for BCE-with-logits loss."
+            )
+        self._label_matrix = matrix
+
+    def _build_derived_features(self, df: pd.DataFrame) -> torch.Tensor:
+        bias = df["bias_label"].fillna(0).astype(float).to_numpy() if "bias_label" in df.columns else np.zeros(len(df))
+        emotion_cols = [c for c in df.columns if c.startswith("emotion_")]
+        emotion = _safe_series(df, emotion_cols)
+        emotion_intensity = emotion.mean(axis=1) if emotion.size else np.zeros(len(df))
+        propaganda = df["propaganda_label"].fillna(0).astype(float).to_numpy() if "propaganda_label" in df.columns else np.zeros(len(df))
+        narrative_cols = [c for c in ("hero", "villain", "victim") if c in df.columns]
+        narrative = _safe_series(df, narrative_cols)
+        narrative_conflict = narrative.std(axis=1) if narrative.size else np.zeros(len(df))
+        ideology = df["ideology_label"].fillna(0).astype(float).to_numpy() if "ideology_label" in df.columns else np.zeros(len(df))
+        dominant_emotion = emotion.max(axis=1) if emotion.size else np.zeros(len(df))
+        feats = np.stack(
+            [
+                _minmax_01(bias * emotion_intensity),
+                _minmax_01(propaganda * narrative_conflict),
+                _minmax_01(ideology * dominant_emotion),
+            ],
+            axis=1,
+        )
+        return torch.from_numpy(feats)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        item = self._encoded_inputs(idx)
+        item["labels"] = torch.as_tensor(self._label_matrix[idx], dtype=torch.float)
+        item["task"] = self.task_name
+        item["task_mask"] = self.task_mask_vector[idx]
+        item["derived_features"] = self.derived_features[idx]
+        return item
+
+
+class MultiTaskAlignedDataset(Dataset):
+
+    def __init__(self, frames: Dict[str, pd.DataFrame]):
+        self.frames = frames
+        self.tasks = [t for t in TASK_ORDER if t in frames]
+        self.df = pd.concat([frames[t] for t in self.tasks], ignore_index=True)
+        self.task_to_index = {t: i for i, t in enumerate(self.tasks)}
+        self._build_masks()
+
+    def _build_masks(self) -> None:
+        self.task_mask = torch.zeros((len(self.df), len(self.tasks)), dtype=torch.long)
+        for i, task in enumerate(self.tasks):
+            self.task_mask[:, i] = 1 if task in self.frames else 0
+
+    def __len__(self) -> int:
+        return len(self.df)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        row = self.df.iloc[idx]
+        mask = self.task_mask[idx]
+        return {
+            "text": row.get("text", ""),
+            "task": row.get("task", ""),
+            "task_mask": mask,
+            "derived_features": torch.zeros(3, dtype=torch.float),
+        }

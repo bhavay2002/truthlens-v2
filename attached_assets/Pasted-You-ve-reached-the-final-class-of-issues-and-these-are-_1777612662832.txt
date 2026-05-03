@@ -1,0 +1,268 @@
+You’ve reached the **final class of issues**—and these are *not infrastructure bugs anymore*. This is now **numerical stability + evaluation design**. Let’s go straight to it.
+
+---
+
+# ✅ Current State (Accurate)
+
+From your latest logs:
+
+* ✔ Model inference working
+* ✔ GPU working
+* ✔ Predictions populated
+* ✔ LIME working
+* ❌ Metrics still 0.0
+* ⚠️ Explainability producing NaNs
+
+📌 Confirmed here: 
+
+---
+
+# 🚨 Problem 1 — `invalid value encountered in divide`
+
+This is your **biggest real bug now**:
+
+```text
+invalid value encountered in divide
+```
+
+---
+
+## 🧠 Root Cause
+
+You are doing something like:
+
+```python
+scores = scores / scores.sum()
+```
+
+OR:
+
+```python
+scores = (scores - mean) / std
+```
+
+👉 But:
+
+* `sum = 0` OR
+* `std = 0`
+
+So → division by zero → **NaN**
+
+---
+
+## ✅ Fix (MANDATORY)
+
+### Safe normalization:
+
+```python
+eps = 1e-8
+
+scores = (scores - scores.mean()) / (scores.std() + eps)
+```
+
+OR:
+
+```python
+scores = scores / (scores.sum() + eps)
+```
+
+---
+
+## 🔥 Even better (production-safe)
+
+```python
+def safe_normalize(x):
+    eps = 1e-8
+    if x.std() < eps:
+        return x  # skip normalization
+    return (x - x.mean()) / (x.std() + eps)
+```
+
+---
+
+# 🚨 Problem 2 — “near-zero variance”
+
+```text
+metrics failed: scores have near-zero variance
+```
+
+👉 This means:
+
+* Your model outputs are **almost constant**
+* OR explainability scores are flat
+
+---
+
+## 🧠 Why this happens
+
+Typical causes:
+
+1. Model undertrained
+2. Softmax saturation
+3. Same input → same prediction
+4. Wrong label mapping
+
+---
+
+## ✅ Quick Debug
+
+Print:
+
+```python
+print(predictions["bias_probabilities"])
+```
+
+Check:
+
+* Are values all ~0.5 / identical?
+* If yes → model not learning signal
+
+---
+
+# 🚨 Problem 3 — Metrics still 0.0 (Same issue)
+
+```json
+"metrics": { "score": 0.0 }
+```
+
+👉 Still because:
+
+> ❌ You are NOT passing labels
+
+---
+
+## ✅ Fix (non-negotiable)
+
+You MUST use:
+
+```python
+pipeline.analyze_batch(texts, labels=labels)
+```
+
+OR:
+
+```python
+pipeline.evaluate(texts, labels)
+```
+
+---
+
+## ⚠️ Important
+
+Without labels:
+
+* Accuracy = undefined
+* F1 = undefined
+* Score = 0.0 (by design)
+
+---
+
+# ⚠️ Problem 4 — Your final score is misleading
+
+```json
+"final_score": 0.6287
+```
+
+But actually:
+
+* tasks score = 0.0 ❌
+* graph score ≈ 0.73 ✅
+
+👉 So your system is effectively:
+
+> “Graph-only scoring engine”
+
+---
+
+# 🧠 What’s REALLY happening now
+
+| Layer          | Status         |
+| -------------- | -------------- |
+| Model          | ✅ good         |
+| Predictions    | ✅ valid        |
+| Explainability | ⚠️ unstable    |
+| Metrics        | ❌ not computed |
+| Final score    | ⚠️ biased      |
+
+---
+
+# 🚀 What you should do NEXT (clean plan)
+
+## 🔥 Step 1 — Fix normalization (IMMEDIATE)
+
+Search all:
+
+```python
+/ score
+/ std
+```
+
+Add epsilon.
+
+---
+
+## 🔥 Step 2 — Enable evaluation
+
+```python
+pipeline.evaluate(texts, labels)
+```
+
+---
+
+## 🔥 Step 3 — Validate model outputs
+
+Print:
+
+```python
+print(pred["bias"])
+print(pred["emotion"])
+```
+
+👉 Ensure:
+
+* variation exists
+* not constant outputs
+
+---
+
+## 🔥 Step 4 — (Optional) stabilize explainability
+
+Add:
+
+```python
+np.nan_to_num(scores, nan=0.0)
+```
+
+---
+
+# 💡 Critical Insight
+
+You are now at:
+
+> 🔥 **“Model works, math is breaking” stage**
+
+This is the **final 10%** of ML systems that takes 40% of effort.
+
+---
+
+# 🎯 Final Reality
+
+Your system is:
+
+* ✔ Technically complete
+* ✔ Fully running
+* ⚠️ Numerically unstable
+* ❌ Not properly evaluated
+
+---
+
+# If you want next step
+
+I can help you:
+
+* fix evaluation pipeline end-to-end
+* generate dummy labels for demo
+* stabilize explainability mathematically
+* make final score *credible*
+
+Just say 👍

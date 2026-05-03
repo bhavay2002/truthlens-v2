@@ -1,0 +1,34 @@
+Solve these issues
+
+
+🟡 PARTIAL
+Item	What's left
+§1.1	FeatureScalingPipeline exists and is used by feature_engineering_pipeline.py, but is not plugged into the main FeaturePipeline, not persisted next to the model checkpoint, and the per-extractor magic constants it was meant to replace still exist in syntactic_features.py (/50.0, /10.0), token_features.py (/10.0), graph/entity_graph_features.py (/10.0), graph/interaction_graph_features.py (/10.0) — see §3.1
+§1.7	src/graph/entity_graph.py still has its own spacy.load + _NLP_CACHE (audit listed graph as in-scope)
+§2.1 / §2.4	emotion_trajectory_features.py:38-78 still re-tokenizes per sentence with the old regex; not converted to LexiconMatcher
+🔴 PENDING
+Item	File	Note
+§2.3	bias_features.py:120, propaganda_features.py:139	caps_ratio still duplicated; not moved to lexical_features.py + ctx.shared
+§2.5	feature_cache.py::_serialize	Still gzip-JSON in the hot path (lz4/zstd swap pending)
+§3.1	syntactic_features.py:177,181, token_features.py:57-58,96, both graph extractors	Magic /50.0 /10.0 divisors still present (will go away when §1.1 is fully wired)
+§3.2	bias_features.py, propaganda_features.py	caps_ratio / exclamation density still emitted unmasked (no NER-mask, no headline weighting, no ablation drop)
+§3.5	semantic_features.py:101	Still returns np.zeros(128, dtype=np.float32) on embedding failure
+§5.1	repo-wide	tokens_word / tokens_bpe exist on the context, but the feature-schema validator does not yet assert that no extractor mixes the two streams in one ratio
+§5.2	syntactic_features.py:111 (filters is_space only) vs :135 (filters is_punct only)	Still two different filters for the same denominator
+§6.2	emotion_intensity_features.py:119	Still .cpu().numpy() per sample inside the transformer branch
+§6.3	fusion/feature_reduction.py:153	np.corrcoef(X, rowvar=False) runs on the full matrix; no chunking for 100k×800 case (matrix is float32 though)
+§7.6	cache_manager.py	LRU is per-namespace; no global memory budget summed across namespaces
+§8	src/features/graph/interaction_graph_features.py	Still registered; audit asked to confirm need or de-register
+§9	config/config.yaml	No features: section for cache.version, cache.disk_max_bytes, cache.disk_max_age_days, scaling.method, scaling.fit_path, pruning.variance_threshold, pruning.correlation_threshold
+§9	feature_bootstrap.py:86	auto_discover still defaults to False; no startup diff log
+§11	emotion_trajectory_features.py:40	Last re.findall(r"\b\w+\b", text.lower()) site — Unicode-strip risk for non-English text
+§11	bias_features.py::extract and other extractors	Still return {} on empty text instead of fixed-key NaN-sentinel dict
+§11	emotion_intensity_features.py	Missing tokenizer not yet wrapped with transformer_available=0.0 indicator
+Summary
+•	8 of 11 refined-plan tasks (5–11) are fully done. Tasks 1–4 remain (FeatureScaler full integration, lexicon vectorization in emotion_trajectory_features, unicode regex + tokens_bpe schema assert, syntactic depth refactor was actually the only piece of task 4 that's already done).
+•	The biggest pending signal items are §1.1 (FeatureScaler not yet end-to-end) and §3.5 (silent zero-vector embedding fallback).
+•	The biggest pending perf item is §2.4 (emotion_trajectory per-sentence loop).
+•	The biggest pending correctness item is §11 unicode regex + the empty-text fixed-key dict.
+•	Server is running clean — no regressions introduced by the done work.
+If you want me to start knocking these out, the highest-ROI batch is §1.1 (full FeatureScaler wiring) + §3.1 (delete the magic constants it replaces) + §3.5 (drop zero-vector fallback) — they collectively unblock the "model learns scale, not signal" critique that's the headline reason the audit scored 5.5/10.
+

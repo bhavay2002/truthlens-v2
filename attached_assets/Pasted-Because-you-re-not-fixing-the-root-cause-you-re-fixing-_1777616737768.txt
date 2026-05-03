@@ -1,0 +1,188 @@
+Because you’re not fixing the **root cause**, you’re fixing **symptoms in the wrong layer**.
+
+Let’s be blunt and precise.
+
+---
+
+# 🧠 Why errors keep “popping” in your system
+
+## 🔥 1. You have a **pipeline with multiple stages**
+
+Your system is NOT simple. It is:
+
+```
+Predictor → Collector → Evaluation Pipeline → evaluate_model
+```
+
+👉 If you fix **one stage**, another stage can:
+
+* overwrite values
+* transform data again
+* break assumptions
+
+---
+
+## ⚠️ 2. You are fixing the WRONG stage
+
+You repeatedly tried to fix:
+
+* `evaluate_model.py` ❌ (downstream)
+
+But the bug is in:
+
+* `evaluation_pipeline.py` ❗ (upstream)
+
+👉 So your fix never actually affects runtime.
+
+---
+
+# 🔁 3. Data keeps getting overwritten
+
+This is the hidden killer.
+
+Even if you did:
+
+```python
+y_pred = np.argmax(y_pred, axis=1)
+```
+
+Later something like this happens:
+
+```python
+y_pred = outputs[f"{task}_probabilities"]   # overwrites your fix ❌
+```
+
+👉 So your fix disappears silently.
+
+---
+
+# 🧩 4. You have **multiple representations of the same thing**
+
+Your model outputs:
+
+```python
+bias_logits          # (N, C)
+bias_probabilities   # (N, C)
+bias_predictions     # (N,)
+```
+
+👉 And your pipeline is mixing them incorrectly.
+
+---
+
+# 🚨 5. Core mistake (THIS is the real issue)
+
+> You are feeding **probabilities** into a function that expects **class labels**
+
+That’s why you ALWAYS get:
+
+```text
+y_true (3,) vs y_pred (3, 3)
+```
+
+---
+
+# 💥 Why the error never changes
+
+Because:
+
+* Same wrong variable used
+* Same shape mismatch
+* Same failure point
+
+👉 So error repeats identically every run
+
+---
+
+# 🎯 The real problem in one sentence
+
+> ❌ Your evaluator expects `(N,)` but you keep passing `(N, C)`
+
+---
+
+# 🧠 Mental Model (this will save you)
+
+## There are ONLY 3 valid formats:
+
+| Stage           | Format        | Shape  |
+| --------------- | ------------- | ------ |
+| Model output    | logits        | (N, C) |
+| Post-processing | probabilities | (N, C) |
+| Evaluation      | predictions   | (N,) ✅ |
+
+---
+
+# 🔥 Why your system feels “unstable”
+
+Because you have:
+
+* multi-task outputs
+* multiple representations
+* layered pipeline
+* fallback logic
+
+👉 Small mismatch → propagates → crashes later
+
+---
+
+# 🚀 How to STOP this permanently
+
+## Step 1 — Lock evaluation input
+
+Force this rule:
+
+```python
+y_pred = outputs[f"{task}_predictions"]
+```
+
+---
+
+## Step 2 — Add assertion (VERY important)
+
+```python
+assert len(np.array(y_pred).shape) == 1, "y_pred must be 1D"
+```
+
+---
+
+## Step 3 — Add debug once
+
+```python
+print(task, np.array(y_pred).shape)
+```
+
+---
+
+# 💡 Big Insight (this is why good engineers don’t get stuck)
+
+You were trying to fix:
+
+> ❌ “error message”
+
+Instead of:
+
+> ✅ “data contract between components”
+
+---
+
+# 🧘 Final clarity
+
+Errors keep appearing because:
+
+1. You fix downstream, bug is upstream
+2. Data is overwritten after your fix
+3. Wrong variable passed repeatedly
+4. Pipeline is complex (multi-stage)
+
+---
+
+# 🎯 Final Answer
+
+> Errors keep popping because your system is **passing the wrong data type between pipeline stages**, and your fixes are not applied where the data is actually used.
+
+---
+
+# If you want this to end right now
+
+Paste `evaluation_pipeline.py` —
+I’ll point to **one exact line** and this will be over.

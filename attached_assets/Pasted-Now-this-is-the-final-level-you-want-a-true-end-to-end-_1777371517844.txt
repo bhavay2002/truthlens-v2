@@ -1,0 +1,388 @@
+Now this is the **final level**—you want a **true end-to-end system audit prompt** that:
+
+* validates **main entrypoint (`main.py`)**
+* validates **pipeline orchestration (`truthlens_pipeline.py`)**
+* forces **full data → inference → evaluation → explainability flow**
+* uses a **real multi-task dataset (your 6-task schema)**
+* detects **integration bugs (most critical at this stage)**
+* enforces **performance + correctness simultaneously**
+
+Your previous prompts were **layer-level**.
+This one is **system-level + execution-grounded**.
+
+Below is the **production-grade FINAL PROMPT (v13 – FULL SYSTEM AUDIT WITH REAL DATA)** 👇
+
+---
+
+# 🚀 **TRUTHLENS FULL SYSTEM AUDIT PROMPT (v13 – END-TO-END + EXECUTION VERIFIED)**
+
+You are a **principal ML systems architect, production auditor, and performance engineer**.
+
+Your task is to perform a **COMPLETE END-TO-END AUDIT of the TruthLens system**, starting from:
+
+```python
+main.py
+→ src/pipelines/truthlens_pipeline.py
+→ ALL downstream modules
+```
+
+---
+
+# 🎯 **PRIMARY MANDATE (STRICT)**
+
+> **The entire pipeline must execute correctly, consistently, efficiently, and produce valid outputs across all tasks.**
+
+You must ensure:
+
+* No broken pipeline stages ❌
+* No data/schema mismatch ❌
+* No token misalignment ❌
+* No incorrect outputs ❌
+* No redundant computation ❌
+* No unused modules ❌
+
+---
+
+# 🧭 **AUDIT SCOPE (STRICT)**
+
+### Entry Points:
+
+```python
+main.py
+src/pipelines/truthlens_pipeline.py
+```
+
+### Must Trace FULL Flow:
+
+```
+Input Data
+→ Data Layer
+→ Features
+→ Analysis
+→ Graph (if used)
+→ Model
+→ Explainability
+→ Aggregation
+→ Inference Output
+→ Evaluation
+```
+
+---
+
+# 🧪 **MANDATORY EXECUTION TEST (REAL DATA)**
+
+You MUST simulate pipeline execution using this **10-row dataset covering ALL 6 tasks**:
+
+---
+
+## 📊 **TEST DATA (MULTI-TASK)**
+
+```python
+DATA = [
+{
+"text": "The government is secretly controlling the media.",
+"bias_label": 1,
+"ideology_label": 2,
+"propaganda_label": 1,
+"CO": 1, "EC": 0, "HI": 0, "MO": 1, "RE": 0,
+"hero": 0, "villain": 1, "victim": 1,
+"hero_entities": "", "villain_entities": "government", "victim_entities": "citizens",
+"emotion_0": 0, "emotion_1": 1, "emotion_2": 0, "emotion_3": 0, "emotion_4": 1,
+"emotion_5": 0, "emotion_6": 0, "emotion_7": 0, "emotion_8": 0, "emotion_9": 0,
+"emotion_10": 0, "emotion_11": 0, "emotion_12": 0, "emotion_13": 0,
+"emotion_14": 0, "emotion_15": 0, "emotion_16": 0, "emotion_17": 0,
+"emotion_18": 0, "emotion_19": 0
+},
+...
+# YOU MUST EXPAND THIS TO 10 ROWS COVERING ALL EDGE CASES
+]
+```
+
+### MUST:
+
+* Expand to **10 rows**
+* Cover:
+
+  * neutral text
+  * multi-label emotion
+  * no-entity narrative
+  * conflicting signals
+  * long text
+  * empty/minimal text
+
+---
+
+# 🔥 **AUDIT DIMENSIONS (SYSTEM-LEVEL)**
+
+---
+
+## 1. 🔗 **PIPELINE EXECUTION TRACE (CRITICAL)**
+
+Trace EXACT flow:
+
+```python
+main.py → pipeline → modules → outputs
+```
+
+### MUST VERIFY:
+
+* all stages executed
+* correct order
+* no skipped modules
+
+### CRITICAL:
+
+* pipeline breaks silently ❌
+* module not connected ❌
+
+---
+
+## 2. 🧠 **DATA FLOW VALIDATION**
+
+### MUST VERIFY:
+
+* schema consistency across all layers
+* correct column usage for all 6 tasks
+
+### CRITICAL:
+
+* label mismatch ❌
+* missing columns ❌
+
+---
+
+## 3. 🧩 **TOKEN + FEATURE + GRAPH ALIGNMENT**
+
+### MUST VERIFY:
+
+* tokens align with:
+
+  * features
+  * explainability
+  * graph nodes
+
+### CRITICAL:
+
+* misalignment across layers ❌
+
+---
+
+## 4. 🧠 **MODEL OUTPUT VALIDATION**
+
+### MUST VERIFY:
+
+* correct shape per task:
+
+| Task       | Output Type        |
+| ---------- | ------------------ |
+| bias       | binary             |
+| ideology   | multi-class        |
+| propaganda | binary             |
+| frame      | multi-label        |
+| narrative  | structured         |
+| emotion    | 20-dim multi-label |
+
+### CRITICAL:
+
+* wrong output dimensions ❌
+
+---
+
+## 5. ⚖️ **AGGREGATION + EXPLAINABILITY CONSISTENCY**
+
+### MUST VERIFY:
+
+* explanation aligns with predictions
+* aggregation uses normalized signals
+
+---
+
+## 6. 🚀 **PERFORMANCE (END-TO-END)**
+
+### MUST DETECT:
+
+* repeated tokenization
+* repeated model forward passes
+* CPU bottlenecks
+
+### REQUIRED:
+
+* batching across pipeline
+* caching where needed
+
+---
+
+## 7. 🔄 **RECOMPUTATION DETECTION**
+
+Trace if ANY step is repeated unnecessarily:
+
+* tokenization
+* feature extraction
+* model forward
+* explanation
+
+---
+
+## 8. 💾 **CONFIG-DRIVEN EXECUTION**
+
+### MUST VERIFY:
+
+* all parameters come from config
+* no hardcoding in pipeline
+
+---
+
+## 9. 🧹 **UNUSED / DEAD MODULES**
+
+Detect across FULL system:
+
+```
+Module: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+```
+
+---
+
+## 10. 🧪 **EDGE CASE VALIDATION**
+
+Using your 10-row dataset:
+
+Check:
+
+* empty text
+* long text
+* missing entities
+* multi-label extremes
+* all-zero labels
+
+---
+
+## 11. 📉 **OUTPUT VALIDITY CHECK**
+
+### MUST VERIFY:
+
+* outputs are:
+
+  * numerically valid
+  * logically consistent
+  * within expected range
+
+---
+
+# 📊 **STRICT OUTPUT FORMAT**
+
+---
+
+## 🔴 1. CRITICAL SYSTEM BUGS
+
+* Location:
+* Issue:
+* Why pipeline fails:
+* Exact fix:
+
+---
+
+## 🟠 2. PIPELINE BREAKS
+
+---
+
+## 🟡 3. DATA FLOW ISSUES
+
+---
+
+## 🧠 4. MODEL OUTPUT ISSUES
+
+---
+
+## ⚖️ 5. AGGREGATION / EXPLAINABILITY ISSUES
+
+---
+
+## 🚀 6. PERFORMANCE BOTTLENECKS
+
+---
+
+## 🔄 7. RECOMPUTATION ISSUES
+
+---
+
+## 🧹 8. UNUSED MODULES
+
+---
+
+## ⚙️ 9. CONFIG ISSUES
+
+---
+
+## 🧪 10. EDGE CASE FAILURES
+
+---
+
+## ✅ 11. VERIFIED PIPELINE COMPONENTS
+
+---
+
+## 📉 12. FINAL SCORE
+
+* Score: /10
+* Why not 10:
+* Steps to reach ≥9.5:
+
+---
+
+# ⚠️ **MANDATORY RULES**
+
+* MUST simulate execution
+* MUST use real data (10 rows)
+* NO assumptions
+* NO skipping modules
+* MUST give code-level fixes
+* MUST detect integration issues
+
+---
+
+# 🎯 **SUCCESS CRITERIA (FULL SYSTEM)**
+
+A system where:
+
+* Pipeline runs end-to-end ✅
+* All 6 tasks handled correctly ✅
+* Outputs are valid and aligned ✅
+* No redundant computation ✅
+* Fully config-driven ✅
+* Production-ready ✅
+
+---
+
+# 🔥 **WHY THIS IS YOUR MOST IMPORTANT PROMPT**
+
+This combines everything from earlier prompts:
+
+* data correctness
+* feature quality
+* model correctness
+* explainability faithfulness
+* aggregation validity
+* inference efficiency
+
+👉 into **ONE execution-level audit**
+
+---
+
+# 🚀 NEXT STEP
+
+If you want the real payoff:
+
+👉 Say **“run full system audit”**
+
+I will:
+
+* simulate full pipeline on your structure
+* identify **exact breaking points**
+* give **patch-level fixes across modules**
+* estimate **end-to-end speed + accuracy gains**
+
+---
+
+This is the step where your system goes from **well-designed → actually working in reality**.

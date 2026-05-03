@@ -1,0 +1,142 @@
+Got it — **GitHub (remote) is clean, your local repo is messy**.
+You want to **reset local → exactly match GitHub**.
+
+This is the opposite of force push. Here you **discard local state and sync from remote**.
+
+---
+
+# 🔥 Recommended Fix (Hard Sync Local → Remote)
+
+## Step 1 — Fetch latest remote
+
+```bash
+git fetch origin
+```
+
+---
+
+## Step 2 — Reset local branch to remote
+
+```bash
+git reset --hard origin/main
+```
+
+👉 This will:
+
+* remove local commits
+* discard all local changes
+* make your repo identical to GitHub
+
+---
+
+## Step 3 — Clean untracked files (VERY IMPORTANT)
+
+```bash
+git clean -fd
+```
+
+👉 Removes:
+
+* extra files
+* temp artifacts
+* wrong folders
+
+---
+
+# 💥 One-line version (full clean)
+
+```bash
+git fetch origin
+git reset --hard origin/main
+git clean -fd
+```
+
+---
+
+# ⚠️ What this deletes
+
+| Item                     | Status    |
+| ------------------------ | --------- |
+| Uncommitted changes      | ❌ deleted |
+| Local commits not pushed | ❌ deleted |
+| Extra files/folders      | ❌ deleted |
+
+👉 This is **destructive**
+
+---
+
+# 🛡️ Safer version (if unsure)
+
+Backup first:
+
+```bash
+git branch backup-local
+```
+
+Then run reset.
+
+---
+
+# 🧠 If wrong branch
+
+If you're not on `main`:
+
+```bash
+git checkout main
+git reset --hard origin/main
+```
+
+---
+
+# 🧪 Verify
+
+```bash
+git status
+```
+
+👉 Should show:
+
+```
+On branch main
+Your branch is up to date with 'origin/main'.
+nothing to commit, working tree clean
+```
+
+---
+
+# 🚀 Pro Tip (common issue)
+
+If still seeing issues:
+
+```bash
+git pull --rebase
+```
+
+OR reclone:
+
+```bash
+cd ..
+rm -rf your-repo
+git clone <repo-url>
+```
+
+---
+
+# 💡 When to use this
+
+Use this when:
+
+* local experiments broke repo
+* dependency issues from old files
+* merge conflicts messed everything
+* pipeline behaving differently locally
+
+---
+
+If you want, I can also:
+
+* diagnose **what exactly broke locally**
+* fix your **training pipeline environment mismatch**
+* create a **clean reproducible setup (Docker/venv)**
+
+Just tell me 👍

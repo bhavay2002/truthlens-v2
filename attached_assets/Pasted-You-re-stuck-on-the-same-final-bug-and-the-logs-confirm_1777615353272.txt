@@ -1,0 +1,184 @@
+You’re stuck on the **same final bug**, and the logs confirm it’s **not fixed yet**.
+
+---
+
+# 🚨 Still Failing (Exact Same Issue)
+
+From your latest run:
+
+```text id="h1x0a7"
+ValueError: Shape mismatch: y_true (3,) vs y_pred (3, 3)
+```
+
+📌 Confirmed again: 
+
+---
+
+# 🧠 Why this is STILL happening
+
+Even though you attempted a fix, your pipeline is still passing:
+
+* `y_true` → `[0, 1, 2]`  → shape `(3,)` ✅
+* `y_pred` → probability matrix → shape `(3, 3)` ❌
+
+👉 That means:
+
+> ❌ Your `argmax` conversion is either missing or placed in the WRONG location
+
+---
+
+# 🔍 Where your fix likely went wrong
+
+You probably added:
+
+```python
+if len(y_pred.shape) == 2:
+    y_pred = np.argmax(y_pred, axis=1)
+```
+
+BUT:
+
+👉 It must be applied **RIGHT BEFORE metrics computation**, not earlier.
+
+---
+
+# ✅ EXACT FIX (Placement Matters)
+
+Go to:
+
+```text
+src/evaluation/evaluate_model.py
+```
+
+---
+
+## 🔧 Find THIS section (around line ~220)
+
+Right before:
+
+```python
+if y_true.shape != y_pred.shape:
+    raise ValueError(...)
+```
+
+---
+
+## ✅ Insert THIS EXACTLY ABOVE it:
+
+```python
+import numpy as np
+
+# Convert probabilities/logits → class indices
+if isinstance(y_pred, np.ndarray) and len(y_pred.shape) == 2:
+    y_pred = np.argmax(y_pred, axis=1)
+
+# Ensure y_true is correct shape
+y_true = np.array(y_true).reshape(-1)
+```
+
+---
+
+# ⚠️ Why your previous fix didn’t work
+
+Because:
+
+* You likely applied it in:
+
+  * `prediction_collector.py` ❌
+  * OR earlier pipeline ❌
+
+👉 But evaluation **reconstructs / modifies `y_pred` again later**
+
+---
+
+# 🧪 How to VERIFY fix is working
+
+Add debug print:
+
+```python
+print("y_true shape:", y_true.shape)
+print("y_pred shape:", y_pred.shape)
+```
+
+---
+
+## ✅ Expected after fix:
+
+```text
+y_true shape: (3,)
+y_pred shape: (3,)
+```
+
+---
+
+# ⚠️ Secondary Warning (already visible)
+
+```text
+y_pred contains classes not in y_true
+```
+
+👉 Not critical, but means:
+
+* your dataset is small (3 samples)
+* some classes missing in ground truth
+
+You can ignore for now.
+
+---
+
+# 📊 Current System State
+
+| Component           | Status       |
+| ------------------- | ------------ |
+| Model               | ✅            |
+| Predictions         | ✅            |
+| Labels              | ✅            |
+| Evaluation pipeline | ✅            |
+| Metrics computation | ❌ (this bug) |
+
+---
+
+# 🚀 After THIS fix — everything unlocks
+
+You will finally get:
+
+```json
+"metrics": {
+  "score": > 0,
+  "confidence": ...,
+  "probabilities": ...
+}
+```
+
+---
+
+# 💡 Final Insight
+
+You are NOT debugging ML anymore.
+
+You are debugging:
+
+> ⚙️ **array shape alignment in evaluation math**
+
+This is literally the **last blocker**.
+
+---
+
+# 🎯 Final Answer
+
+* ❌ `y_pred` still 2D
+* ❌ Fix not applied at correct place
+* ✅ Add `argmax` inside `evaluate_model.py` right before shape check
+* 👉 Then evaluation will COMPLETE
+
+---
+
+# If you want next step
+
+After this works, I can help you:
+
+* compute proper per-task metrics (F1, accuracy, macro/micro)
+* validate model quality
+* finalize scoring for demo
+
+You are **one correct line placement away**.

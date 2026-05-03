@@ -1,0 +1,268 @@
+Good—this run confirms something very specific:
+
+👉 You **partially fixed the label issue**, but the system is now failing on a **device mismatch inside the emotion pipeline**.
+
+---
+
+# 🚨 CURRENT FAILURE (Confirmed)
+
+```text
+Expected all tensors to be on the same device, but found cuda:0 and cpu
+Sanity check: missing loss
+```
+
+📍 Exact log: 
+
+---
+
+# 🧠 What Changed Since Last Run
+
+### ✅ FIXED
+
+* Previous error:
+
+  ```text
+  labels must have shape (batch_size, 20)
+  ```
+
+  → no longer appearing ✔
+
+---
+
+### ❌ NEW FAILURE
+
+```text
+Skipping step due to RuntimeError in forward/loss
+→ mixed devices (cuda + cpu)
+```
+
+👉 So now:
+
+* **shape mismatch = solved**
+* **device consistency = still broken (emotion only)**
+
+---
+
+# 🔍 Why ONLY Emotion Fails
+
+Look carefully:
+
+### Dataset
+
+```text
+Dropped 9 columns → using 11 labels
+```
+
+### Model
+
+```text
+MultiLabelHead initialized | num_labels=20
+```
+
+⚠️ That mismatch is still present in logs (even if forward check changed)
+
+---
+
+### BUT real crash is here:
+
+```text
+forward/loss → mixed device tensors
+```
+
+👉 Meaning:
+
+* some tensors moved to GPU
+* some remained on CPU
+
+---
+
+# 🧨 ROOT CAUSE (Precise)
+
+In **emotion pipeline**, at least ONE of these is still on CPU:
+
+* labels
+* pos_weight (very common)
+* class weights
+* loss tensors
+
+---
+
+# 🔥 MOST LIKELY CULPRIT
+
+This line in your config:
+
+```text
+pos_weight=True
+```
+
+👉 `pos_weight` tensor is almost always created like:
+
+```python
+pos_weight = torch.tensor([...])   # ❌ CPU by default
+```
+
+Then used in:
+
+```python
+BCEWithLogitsLoss(pos_weight=pos_weight)
+```
+
+👉 While logits are on GPU → 💥 mismatch
+
+---
+
+# ✅ FIX (CRITICAL)
+
+## 🔧 Move `pos_weight` to GPU
+
+Find where you create it (likely in loss builder):
+
+```python
+pos_weight = torch.tensor(pos_weights)
+```
+
+---
+
+### ✅ FIX:
+
+```python
+pos_weight = torch.tensor(pos_weights).to(device)
+```
+
+OR better:
+
+```python
+pos_weight = torch.tensor(pos_weights, device=device)
+```
+
+---
+
+# 🔧 ALSO FIX (Batch Safety)
+
+Inside training step:
+
+```python
+batch = {
+    k: v.to(device) if isinstance(v, torch.Tensor) else v
+    for k, v in batch.items()
+}
+```
+
+---
+
+# 🔧 ALSO VERIFY (Labels)
+
+Ensure:
+
+```python
+labels = labels.float().to(device)
+```
+
+👉 For multilabel BCE
+
+---
+
+# ⚠️ Hidden Bug Still Present
+
+Your logs STILL show:
+
+```text
+MultiLabelHead initialized | num_labels=20
+```
+
+But dataset:
+
+```text
+kept 11/20
+```
+
+👉 You **haven’t fixed model-output alignment yet**
+
+This will cause:
+
+* incorrect loss learning
+* or silent bugs later
+
+---
+
+# 🚀 Recommended Proper Fix (Do This Once)
+
+## In `create_trainer_fn`
+
+```python
+active_labels = dataset.active_columns
+
+model = EmotionClassifier(
+    num_emotions=len(active_labels)
+)
+```
+
+---
+
+# 🧠 Why This Happens (Important Insight)
+
+Multilabel pipelines have **3 separate device domains**:
+
+| Component                               | Device          |
+| --------------------------------------- | --------------- |
+| Model                                   | GPU             |
+| Batch                                   | GPU             |
+| Loss params (pos_weight, class_weights) | ❌ CPU (default) |
+
+👉 Most people forget the third one
+
+---
+
+# ⚡ System Status Now
+
+| Component                | Status                |
+| ------------------------ | --------------------- |
+| GPU usage                | ✅ perfect             |
+| Bias task                | ✅ fully working       |
+| Emotion preprocessing    | ✅ correct             |
+| Emotion model shape      | ⚠️ still inconsistent |
+| **Loss device handling** | ❌ BROKEN              |
+
+---
+
+# 🎯 Final Action Plan
+
+## MUST FIX (blocking)
+
+1. Move `pos_weight` → GPU
+
+---
+
+## SHOULD FIX (correctness)
+
+2. Align `num_labels` with active labels (11, not 20)
+
+---
+
+## SAFETY FIX
+
+3. Ensure ALL batch tensors `.to(device)`
+
+---
+
+# 🚀 Bottom Line
+
+You’re now at:
+
+> **Final class of bugs: loss-layer device mismatches**
+
+Once you fix `pos_weight` → GPU:
+
+✔ Emotion sanity check will pass
+✔ Training will continue
+
+---
+
+# 💬 If you want
+
+I can:
+
+* Pinpoint exact line in your `loss_engine` or `task_loss_router`
+* Or give you a **fully safe multilabel loss implementation (no device bugs ever again)**
+
+You’re literally **one fix away from full pipeline success**.

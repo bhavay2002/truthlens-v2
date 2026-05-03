@@ -1,0 +1,205 @@
+You’re now targeting the evaluation layer, which is where many systems quietly break in credibility and performance. Most repos treat evaluation as an afterthought—your prompt shouldn’t.
+Below is a strict, production-grade upgrade (v6 – EVALUATION LAYER ONLY, OPTIMIZATION PRIORITY) tailored to TruthLens.
+________________________________________
+🚀 TRUTHLENS EVALUATION LAYER AUDIT PROMPT (v6 – PERFORMANCE + METRIC CORRECTNESS CRITICAL)
+You are a principal ML evaluation scientist, metrics engineer, and high-performance systems auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the src/evaluation/ folder.
+This layer determines:
+Whether the model is actually correct, fair, stable, and production-ready
+If this layer is flawed →
+➡️ You will optimize the wrong model, ship misleading metrics, and degrade trust.
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+All metrics must be mathematically correct, task-aware, vectorized, reproducible, and efficiently computed.
+You must ensure:
+•	No incorrect metrics ❌
+•	No leakage into evaluation ❌
+•	No per-sample loops ❌
+•	No redundant recomputation ❌
+•	No misleading aggregation ❌
+•	No unused evaluation modules ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/evaluation/* all files
+Also validate integration with:
+•	src/training/ (predictions + labels)
+•	src/config/
+•	src/analysis/ (if evaluation uses explanation outputs)
+________________________________________
+🔥 AUDIT DIMENSIONS (EVALUATION-SPECIFIC)
+________________________________________
+1. 🔗 EVALUATION PIPELINE INTEGRITY
+Trace:
+model outputs (logits/probs)
+→ post-processing (sigmoid / softmax / threshold)
+→ metric computation
+→ aggregation
+→ reporting
+MUST VERIFY:
+•	Correct transformation:
+o	logits → probabilities
+•	Thresholding applied correctly per task
+•	No mismatch between predictions and labels
+CRITICAL:
+•	Using logits directly in metrics ❌
+•	Wrong activation (sigmoid vs softmax) ❌
+________________________________________
+2. 🧠 METRIC CORRECTNESS (VERY IMPORTANT)
+Validate:
+•	Binary:
+o	accuracy, precision, recall, F1
+•	Multi-class:
+o	macro/micro F1
+•	Multi-label:
+o	per-label + macro metrics
+MUST VERIFY:
+•	correct averaging strategy
+•	no misuse of sklearn defaults
+•	correct handling of class imbalance
+CRITICAL BUGS:
+•	averaging logits instead of predictions
+•	mixing macro and micro incorrectly
+•	ignoring class imbalance
+________________________________________
+3. ⚖️ THRESHOLDING LOGIC (CRITICAL)
+MUST VERIFY:
+•	task-specific thresholds
+•	no global threshold for all tasks
+•	threshold tuning done on validation set only
+CRITICAL:
+•	using test set for threshold tuning ❌
+•	fixed threshold (0.5) for imbalanced tasks ❌
+________________________________________
+4. 📊 MULTI-TASK EVALUATION (YOUR SYSTEM)
+Validate against schema :
+•	binary (bias, propaganda)
+•	multi-class (ideology)
+•	multi-label (frame, emotion)
+•	structured outputs (narrative)
+MUST VERIFY:
+•	evaluator handles all task types correctly
+•	no assumption of single-task outputs
+________________________________________
+5. 🚀 PERFORMANCE (TOP PRIORITY)
+FORBIDDEN:
+•	Python loops over samples ❌
+•	recomputing predictions multiple times ❌
+•	repeated metric calculations ❌
+MUST VERIFY:
+•	vectorized metric computation
+•	batch-level evaluation
+•	reuse predictions
+________________________________________
+6. 💾 CACHING / REUSE
+MUST VERIFY:
+•	predictions cached and reused
+•	metrics not recomputed unnecessarily
+CRITICAL:
+•	recomputing logits → probabilities repeatedly
+•	no caching between evaluation passes
+________________________________________
+7. 🧮 NUMERICAL STABILITY
+Detect:
+•	division by zero
+•	undefined precision/recall
+•	NaNs in metrics
+MUST FIX:
+•	epsilon smoothing
+•	safe division
+________________________________________
+8. 📉 CALIBRATION (IF PRESENT)
+MUST VERIFY:
+•	proper probability calibration (Platt / isotonic)
+•	evaluated on validation set
+CRITICAL:
+•	calibration on test set ❌
+•	using uncalibrated probabilities for thresholding ❌
+________________________________________
+9. ⚖️ FAIRNESS & BIAS METRICS
+MUST VERIFY:
+•	fairness metrics computed correctly
+•	no leakage of protected attributes into training
+CHECK:
+•	group-wise performance
+•	disparity metrics
+________________________________________
+10. 🧹 UNUSED / DEAD EVALUATION CODE
+Detect:
+File/Metric: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+11. 🧪 EDGE CASES
+Check:
+•	all predictions same class
+•	empty predictions
+•	missing labels
+•	extreme class imbalance
+•	batch size = 1
+________________________________________
+12. ⚙️ CONFIG INTEGRATION
+MUST VERIFY:
+•	no hardcoded thresholds
+•	no hardcoded metrics
+•	config controls evaluation behavior
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL EVALUATION BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why metrics are wrong:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. METRIC MISUSE ISSUES
+________________________________________
+⚖️ 4. THRESHOLDING ISSUES
+________________________________________
+🧠 5. MULTI-TASK FAILURES
+________________________________________
+🚀 6. GPU / PERFORMANCE ISSUES
+________________________________________
+💾 7. CACHING ISSUES
+________________________________________
+🧮 8. NUMERICAL STABILITY ISSUES
+________________________________________
+⚖️ 9. FAIRNESS ISSUES
+________________________________________
+🧹 10. UNUSED EVALUATION CODE
+________________________________________
+🧪 11. EDGE CASE FAILURES
+________________________________________
+✅ 12. VERIFIED COMPONENTS
+________________________________________
+📉 13. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST ensure metric correctness
+•	MUST enforce vectorization
+•	MUST prevent leakage
+•	MUST validate all task types
+________________________________________
+🎯 SUCCESS CRITERIA (EVALUATION LAYER)
+A system where:
+•	Metrics are mathematically correct ✅
+•	Evaluation is fully vectorized ✅
+•	No redundant computation ✅
+•	Multi-task evaluation works flawlessly ✅
+•	Thresholding is task-aware + validated ✅
+•	Results are reproducible + trustworthy ✅
+________________________________________
+
+

@@ -1,0 +1,282 @@
+🚀 TruthLens — src/features/ Layer Audit
+Scope: 66 Python files under src/features/. Validated integration with src/inference/, src/analysis/, src/config/, src/data_processing/, src/graph/, src/models/, api/app.py.
+________________________________________
+🔴 1. CRITICAL FEATURE BUGS
+1.1 — feature_scaling.py is mis-named: it contains a model, not scaling
+•	File: src/features/fusion/feature_scaling.py:1-105
+•	Function: HybridTruthLensModel(nn.Module)
+•	Issue: The file lives in fusion/ but defines a Transformer + engineered-feature nn.Module. There is no scaler in this module. The fusion docstring (feature_fusion.py:25-31) explicitly says "Population-level scaling MUST be applied via FeatureScaling using a scaler fitted on the training set" — that class does not exist.
+•	Why it breaks signal: Every extractor falls back to its own ad-hoc local clip/normalize (_safe, sum-to-one, /20.0, /10.0). Mixed units (ratios, counts, embeddings) are concatenated at fusion time without ever being z-scored against a fitted population. The model learns scale, not signal.
+•	Fix:
+i.	Move HybridTruthLensModel to src/models/architectures/ (where it belongs).
+ii.	Create the missing src/features/fusion/feature_scaling.py::FeatureScaler class with fit(matrix, names) / transform(dict) -> dict using sklearn.preprocessing.StandardScaler keyed by feature name. Persist mean/var to the checkpoint dir alongside the model so inference and training share scale.
+iii.	Replace per-extractor magic constants (avg_len / 20.0, std_len / 10.0, etc. — see §3.4) with the fitted scaler.
+1.2 — _graph_cache_key collides across configs
+•	File: src/features/pipelines/batch_feature_pipeline.py:27-29, used at line 158
+•	Code:
+def _graph_cache_key(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+•	Issue: Key is sha256(text) only. The graph pipeline's embedding_dim, node_filter, entity_model, and narrative_lexicon_version are not in the key.
+•	Why it breaks: Switch the entity NER model or narrative lexicon → cache returns yesterday's graph features. Silent regression.
+•	Fix:
+def _graph_cache_key(text: str, graph_cfg: dict) -> str:
+    payload = {
+        "v": GRAPH_CACHE_VERSION,
+        "text": text,
+        "cfg": json.dumps(graph_cfg, sort_keys=True, default=str),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode()
+    ).hexdigest()
+Pass self.pipeline.graph_pipeline.config_fingerprint() from the call site.
+1.3 — Recomputed graph features (double extraction)
+•	File: src/features/pipelines/feature_pipeline.py:175-194
+•	Issue: extract() does self.fusion.extract(ctx) → may include EntityGraphFeatures/InteractionGraphFeatures → then unconditionally calls self._merge_graph_features(ctx, features) which re-runs the full graph_pipeline.run(text). If the user has registered the graph extractors in fusion (the bootstrap does), the heavy NetworkX/spaCy graph build runs twice per request.
+•	Fix: In _merge_graph_features, short-circuit on ctx.shared.get("_graph_already_merged") and have the fusion-side EntityGraphFeatures write the result into ctx.shared["_graph"] so the merge step reuses it instead of rebuilding.
+1.4 — Per-sample loop in FeaturePipeline.batch_extract
+•	File: src/features/pipelines/feature_pipeline.py:200-215
+•	Code:
+results = []
+for ctx in contexts:
+    results.append(self.extract(ctx))
+•	Issue: BatchFeaturePipeline exposes a DataLoader/AMP/pin_memory infrastructure (good), but the inner kernel is still a Python for over N contexts. Embedding extraction is the only thing actually batched.
+•	Why it breaks: Throughput claim of "batch pipeline" is false for everything except _compute_embeddings. Bias/emotion/propaganda lexicon extractors are CPU-serial.
+•	Fix:
+i.	Add BaseFeature.extract_batch(self, contexts: List[FeatureContext]) -> List[Dict] and override it in lexicon-style extractors with a vectorized implementation (see §2.1).
+ii.	Have the pipeline call feature.extract_batch(contexts) and only fall back to the per-sample path if extract_batch is not overridden.
+1.5 — Per-sample _attempt_resume-style swallow in FeatureCache.save leaves orphan tempfiles
+•	File: src/features/cache/feature_cache.py:100-120
+•	Issue: tempfile.NamedTemporaryFile(delete=False, dir=…) followed by manual temp_path.replace(path) inside a try/except that only logs. If the process is killed between tmp.flush() and temp_path.replace(path), the temp file is orphaned forever (the cache dir grows monotonically). There is also no disk-cache eviction anywhere — cache size grows unbounded.
+•	Fix: Wrap with a try/finally that temp_path.unlink(missing_ok=True) on any path that does not reach replace. Add a periodic LRU/TTL pruner: feature_cache.prune(max_bytes=…, max_age_days=…) invoked from the inference startup hook in api/app.py.
+1.6 — Resume of cache key does not include the tokenizer
+•	File: src/features/cache/feature_cache.py + src/features/cache/cache_manager.py
+•	Issue: Cache key payload is {CACHE_VERSION, feature_set_fingerprint, text, tokens, metadata}. The tokenizer name/version is absent. Switch roberta-base ↔ xlm-roberta-base or upgrade the lexicon, and old vectors are returned for new model heads.
+•	Fix: Include metadata["tokenizer_id"] (e.g. "roberta-base@4.57") and the SHA of every loaded lexicon file in the fingerprint. Bump CACHE_VERSION to "v3".
+1.7 — Duplicate spaCy model loads (memory + cold-start cost)
+•	File: src/features/narrative/narrative_role_features.py:55-66 and src/features/text/syntactic_features.py:50-61 (and similar in src/graph/entity_graph.py)
+•	Issue: Each calls its own spacy.load("en_core_web_sm"). The HARDEN-PERF-3 audit already consolidated src/analysis/* onto src/analysis/_nlp.get_shared_nlp() — src/features/* was missed.
+•	Why it breaks: ~50 MB resident per copy, and each copy warms its own pipelines on first call → cold-start latency multiplied.
+•	Fix: Replace every spacy.load(...) in src/features/ with from src.analysis._nlp import get_shared_nlp; self._nlp = get_shared_nlp(). Same disable_components=() so the cache key is unified.
+1.8 — _merge_graph_features silently swallows all graph errors
+•	File: src/features/pipelines/feature_pipeline.py:171-173
+•	Code: except Exception as e: logger.debug("Graph merge failed: %s", e)
+•	Issue: logger.debug (not warning / error) means a broken graph pipeline produces an empty graph-features sub-dict and the downstream model just sees zeros — masquerading as "no graph signal" instead of an error. This is the same anti-pattern HARDEN-5 fixed in _evaluate_on_test.
+•	Fix: Promote to logger.warning and increment a metrics counter (features.graph.merge_failures). Re-raise in dev (if os.getenv("TRUTHLENS_STRICT_FEATURES")).
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+2.1 — Lexicon scoring is a Python loop over tokens
+•	Location: src/features/bias/bias_features.py:64-77 (_weighted_ratio), src/features/bias/bias_lexicon_features.py:47, src/features/emotion/emotion_features.py:60, src/features/emotion/emotion_lexicon_features.py:78, src/features/propaganda/propaganda_features.py (lexicon section)
+•	Issue: Every lexicon scorer iterates for token in tokens and does if token in lexicon: …. With ~5 lexicons × ~7 categories × ~10k tokens, that's millions of dict lookups per article in pure Python.
+•	Fix: Pre-build a numpy array of token strings once per article in FeatureContext.__post_init__, then for each lexicon:
+vocab = np.array(list(lexicon.keys()))
+weights = np.array(list(lexicon.values()), dtype=np.float32)
+hits = np.isin(tokens_arr, vocab)
+# weighted dot-product via lookup table
+lookup = {w: i for i, w in enumerate(vocab)}
+idxs = np.array([lookup[t] for t in tokens_arr[hits]])
+score = weights[idxs].sum() / (len(tokens_arr) + EPS)
+Or precompile one regex per lexicon: re.compile(r"\b(" + "|".join(map(re.escape, lex)) + r")\b") and len(rgx.findall(text)) — the C regex engine is ~50× faster than the Python loop.
+•	Expected speedup: 10-50× on long articles; reduces per-call CPU from ~80 ms to ~2-5 ms for the lexicon group.
+2.2 — Repeated tokenization per feature
+•	Location: src/features/bias/bias_lexicon.py:63, 110, 117 and across bias/, emotion/, propaganda/, narrative/, discourse/
+•	Issue: Each feature calls its own _tokenize(text) → re.findall(r"\b\w+\b", text.lower()). With ~12 lexicon-style features on the same article, the same regex runs ~12 times.
+•	Fix: FeatureContext already has a tokens field — make it mandatory at construction time and remove the per-feature tokens or _tokenize(text) fallback. Compute once in FeaturePipeline.extract (or in the data layer if the cache stores them).
+•	Expected speedup: 5-10× on the lexicon group cumulatively.
+2.3 — text.split() recomputed inside every extractor for caps_ratio
+•	Location: src/features/bias/bias_features.py:149, src/features/propaganda/propaganda_features.py:138
+•	Code: sum(1 for w in text.split() if w.isupper() and len(w) > 2) / (n + EPS)
+•	Issue: text.split() is recomputed per extractor on the same text; ignores the already-tokenized list.
+•	Fix: Move caps_ratio to src/features/text/lexical_features.py, compute once vectorized:
+toks = np.array(tokens)
+caps_mask = np.char.isupper(toks) & (np.char.str_len(toks) > 2)
+caps_ratio = float(caps_mask.mean())
+Expose via ctx.shared["caps_ratio"] so bias/propaganda just read it.
+2.4 — Per-sentence loop in emotion_trajectory_features._lexicon_vector
+•	Location: src/features/emotion/emotion_trajectory_features.py:78
+•	Issue: [_lexicon_vector(s) for s in sentences] re-tokenizes every sentence; HuggingFace tokenizer in emotion_intensity_features.py:117 then re-tokenizes the same spans for the transformer branch.
+•	Fix: Tokenize once at the doc level with offsets; slice the offset array per sentence span. Run the transformer once on the doc and pool by sentence boundary using offset alignment.
+•	Expected speedup: 3-5× on long articles with many sentences.
+2.5 — FeatureCache.save is gzip-JSON in the hot path
+•	Location: src/features/cache/feature_cache.py:_serialize
+•	Issue: Gzipping a feature dict on every save adds CPU to the sync path. With LRU memory cache hitting first this is mostly fine, but cold-start writes are serialized.
+•	Fix: Use pickle + lz4 (or zstd level 1) for the disk format. Keep JSON only for human-readable debug dumps.
+•	Expected speedup: 3-8× on disk write throughput.
+2.6 — Python loop computing dependency depth per token
+•	Location: src/features/text/syntactic_features.py:118-126
+•	Issue: for token in tokens: while head.head != head: depth += 1; head = head.head — O(N · D) Python.
+•	Fix: spaCy exposes Token.ancestors; better, compute depths in one pass with a memoization dict keyed by token.i:
+depth_cache = {}
+def depth(tok):
+    if tok.i in depth_cache: return depth_cache[tok.i]
+    d = 0 if tok.head == tok else depth(tok.head) + 1
+    depth_cache[tok.i] = d
+    return d
+•	Expected speedup: 5-10× on long articles.
+________________________________________
+🟡 3. FEATURE QUALITY ISSUES
+3.1 — Hard-coded normalization constants (/20.0, /10.0)
+•	Location: src/features/text/lexical_features.py:122-123
+"lex_avg_word_length": self._safe(avg_len / 20.0),
+"lex_std_word_length": self._safe(std_len / 10.0),
+•	Issue: Brittle across languages and domains; wrong choice silently bottoms-out at 0.x for the entire dataset.
+•	Fix: Drop the divisor and let FeatureScaler (§1.1) z-score it.
+3.2 — caps_ratio and exclamation_density are noise-heavy heuristics
+•	Location: bias_features.py:146-151, propaganda_features.py:131-141
+•	Issue: Caps ratio fires on USA, NATO, WHO, OPEC, stock tickers — all common in objective news → false positive for "propaganda intensity". ! count is style-dependent (op-eds vs wire reports) and gameable.
+•	Fix: Replace with named-entity-excluded caps ratio (use spaCy NER mask) and weight ! by sentence type (avoid headlines / quotes). Or drop entirely if ablation shows < 0.5% AUROC contribution (run via src/features/importance/permutation_importance.py).
+3.3 — Entropy normalization divides by log(0) proxy
+•	Location: src/features/text/lexical_features.py:82, src/features/text/syntactic_features.py:85, 109, src/features/bias/bias_features.py:140, src/features/text/semantic_features.py:58-59
+•	Code: entropy = entropy_raw / (np.log(len(probs) + EPS))
+•	Issue: When len(probs) == 1 (single unique token), np.log(1) == 0 → divide by EPS = 1e-8 → entropy explodes to ~raw * 1e8.
+•	Fix: entropy = entropy_raw / np.log(max(len(probs), 2)).
+3.4 — (polarity + 1) / 2 not clipped
+•	Location: src/features/emotion/emotion_features.py:155
+•	Issue: Assumes polarity ∈ [-1, 1] strictly; weighted lexicons can drift outside.
+•	Fix: np.clip((polarity + 1) / 2, 0.0, 1.0).
+3.5 — Fallback np.zeros(128) on embedding failure
+•	Location: src/features/text/semantic_features.py:101
+•	Issue: A failed embedding pass yields a 128-dim all-zero vector, silently injected into fusion. The model can latch onto the constant pattern and a bug in the embedding loader becomes "feature signal".
+•	Fix: Raise — or set a sem_available=0.0 indicator and exclude all 128 dims from fusion when unavailable (return {} instead of zeros, then validate downstream that the missing keys are tolerated).
+3.6 — Fallback "cliff" in syntactic features
+•	Location: src/features/text/syntactic_features.py:171-177
+•	Issue: If spaCy unavailable → all syntactic features hard-coded to 0.0. Distribution becomes bimodal (real values vs constant 0), which the model will learn as "spaCy-was-up signal".
+•	Fix: Drop the keys entirely and rely on FeatureSchemaValidator to fill with the training-set mean (impute, don't zero-fill).
+3.7 — Per-row z-score in FeatureFusion._normalize is statistically invalid
+•	Location: src/features/fusion/feature_fusion.py:66-81
+•	Issue: The docstring (lines 28-31) admits this. The function is left in (default normalize=False) but if a caller flips it on — they will mix ratios, counts and embeddings into the same z-score → garbage. There is also an early-return bug: when std < EPS the function returns the raw dict, so some batches are normalized and others aren't (silent feature-scale skew).
+•	Fix: Delete _normalize entirely. Use the fitted FeatureScaler from §1.1.
+________________________________________
+🧠 4. REDUNDANT / CORRELATED FEATURES
+Group A	Group B	Overlap
+src/features/emotion/emotion_lexicon.py::EmotionLexiconAnalyzer	src/features/emotion/emotion_features.py (intensity, polarity)	Both compute per-emotion frequency on the same lexicon.
+src/features/emotion/emotion_intensity_features.py (transformer + lexicon)	src/features/emotion/emotion_lexicon_features.py	The lexicon branch is recomputed in both.
+src/features/bias/framing_features.py	src/features/narrative/narrative_frame_features.py	Both compute "framing" lexicon scores. Different lexicons but conceptually the same axis.
+src/features/bias/bias_features.py (bias_diversity = entropy)	src/features/text/lexical_features.py (lex_entropy)	Same Shannon entropy on the same tokens.
+src/features/feature_pruning.py (constant + variance + corr)	src/features/fusion/feature_selection.py (variance + corr + MI + TopK)	Variance + correlation filter implemented twice with different APIs.
+propaganda_features.py::caps_ratio	bias_features.py::caps_ratio	Identical computation, two extractors.
+propaganda_features.py::rhetoric (!+?)	bias_features.py::exclamation_density	Subset overlap; high correlation expected.
+Fix priorities:
+1.	Merge feature_pruning.py ↔ feature_selection.py into src/features/fusion/feature_reduction.py. Single API: fit_transform(matrix, names) -> (matrix, kept_names).
+2.	Compute one lex_entropy in text/lexical_features.py; have bias_features.py read ctx.shared["lex_entropy"].
+3.	Compute caps_ratio, exclam_density, question_density once in text/lexical_features.py. Delete duplicates.
+4.	Run a correlation pass on the training-set feature matrix (feature_pruning.high_correlation_filter at threshold 0.9) and prune duplicates before model training. Persist the kept-name list in the checkpoint dir.
+________________________________________
+🧩 5. TOKEN ALIGNMENT ISSUES
+5.1 — Two tokenization regimes coexist
+•	re.findall(r"\b\w+\b", text.lower()) in 9 extractors.
+•	HuggingFace AutoTokenizer (DistilRoBERTa) in emotion_intensity_features.py:117.
+•	spaCy in syntactic / narrative-role / graph.
+•	The downstream model uses RoBERTa byte-pair tokens (pad_id=1) per HARDEN docs.
+Result: Features like coverage, density, ratio are denominated in "regex words" but the model sees subword tokens. A 100-word article is ~140 BPE tokens. Per-sample numerators agree, denominators don't → systematic scale shift between train and inference if the tokenizer ever changes.
+Fix: Standardize on two token streams stored on FeatureContext:
+•	ctx.tokens_word: regex-word tokens, used for lexicon coverage + density features.
+•	ctx.tokens_bpe: model tokenizer ids, used for transformer branches.
+Document this in src/features/base/base_feature.py and have the schema validator assert no extractor mixes the two streams in one ratio.
+5.2 — syntactic_features._extract_spacy_doc filters tokens differently in two places
+•	Location: syntactic_features.py:69 (excludes spaces) and :94 (excludes punct).
+•	Issue: n is one count, sentence-length array uses another. Ratios using n as denominator and per-sentence numerators are mismatched.
+•	Fix: Pick one filter (not t.is_space and not t.is_punct) and reuse the same tokens list for both ratios.
+________________________________________
+🚀 6. GPU / TORCH ISSUES
+6.1 — _merge_graph_features runs inside torch.autocast("cuda") block
+•	Location: feature_pipeline.py:179-189
+•	Issue: Autocast is opened, then self.fusion.extract(ctx) runs (fine), but self._merge_graph_features(ctx, features) runs inside the same with torch.no_grad(): scope. NetworkX/lexicon work doesn't need autocast and the unconditional cuda.is_available() check forces an autocast on environments where the graph stage is CPU-only.
+•	Fix: Close the autocast scope before _merge_graph_features. Move the with torch.autocast(...) wrapper into the embedding extractor only.
+6.2 — Embedding extractor likely does .cpu().numpy() per call
+•	Location: src/features/text/semantic_features.py (and emotion_intensity_features.py transformer branch)
+•	Issue: Embeddings produced on GPU are immediately moved to CPU + numpy for downstream dict storage. If batch size > 1, the device transfer is per-sample.
+•	Fix: Batch the GPU forward pass (already done in BatchFeaturePipeline._compute_embeddings); transfer once for the whole batch at the end. Emit float32 numpy arrays only at the cache boundary.
+6.3 — feature_selection.py builds large NumPy matrices in-place
+•	Location: src/features/fusion/feature_selection.py:31
+•	Issue: Converts list-of-dicts to a dense NumPy matrix; for 100k samples × 800 features that's ~640 MB on the heap with a copy during np.var / np.corrcoef.
+•	Fix: Use np.float32 (instead of default float64) and process in chunks of 10k rows for the correlation matrix.
+________________________________________
+💾 7. CACHING ISSUES
+#	Issue	File	Fix
+7.1	Cache key omits tokenizer ID	feature_cache.py	Add metadata["tokenizer_id"] + lexicon SHAs to fingerprint; bump CACHE_VERSION to v3.
+7.2	Disk cache grows unbounded	cache/ dir	Add prune(max_bytes, max_age_days) invoked at API startup.
+7.3	Orphan tempfiles on crash	feature_cache.py:108	try/finally to temp_path.unlink(missing_ok=True).
+7.4	_graph_cache_key(text) only	batch_feature_pipeline.py:27	Include graph_pipeline.config_fingerprint().
+7.5	Graph features computed twice	feature_pipeline.py:179-194	Set ctx.shared["_graph"] in fusion extractor; merge step reads it.
+7.6	LRU is per-namespace, not bounded across namespaces	cache_manager.py	Add a global memory budget across all namespaces (sum of sizes).
+7.7	.save() swallows exceptions, _path_cache filled	feature_cache.py:120	logger.exception + raise; do not populate path cache on failure.
+________________________________________
+🧹 8. UNUSED / DEAD FEATURES
+Confirmed by import-graph scan against src/inference/, src/analysis/, api/app.py, src/models/:
+Path	Status	Action
+src/features/discourse/discourse_features.py	Registered, not consumed by BiasProfileBuilder or any inference path	Either wire into BiasProfileBuilder.build_profile or de-register.
+src/features/discourse/argument_structure_features.py	Same — registered, not consumed	Same.
+src/features/graph/interaction_graph_features.py	Registered, not in fusion pipeline	Confirm need; if kept, fix §1.2/§1.3.
+src/features/utills/tfidf_engineering.py	Used only by an offline data-prep script; folder name is typo utills	Rename folder → utils; document as offline-only in module docstring.
+src/features/fusion/feature_scaling.py::HybridTruthLensModel	Misplaced (model in fusion folder), never imported as a scaler	Move to src/models/architectures/hybrid_truthlens.py.
+src/features/feature_pruning.py	Overlaps fusion/feature_selection.py	Merge — see §4.
+src/features/importance/{feature_ablation, permutation_importance, shap_importance}.py	Used only by src/evaluation/advanced_analysis.py (offline)	OK — flag in module docstring as "offline-only, not in inference path".
+________________________________________
+⚙️ 9. CONFIG ISSUES
+•	config/config.yaml is loaded via src.utils.settings.load_settings, but no features: section is documented for the new scaler/cache versions/disk-eviction knobs proposed above. Add:
+features:
+  cache:
+    version: "v3"
+    disk_max_bytes: 5_368_709_120  # 5 GB
+    disk_max_age_days: 30
+  scaling:
+    method: "standard"            # standard | minmax | none
+    fit_path: "saved_models/feature_scaler.json"
+  pruning:
+    variance_threshold: 1e-4
+    correlation_threshold: 0.95
+•	feature_bootstrap.py::FEATURE_MODULES is a manual whitelist with auto_discover=False default → adding a file to a subfolder silently does nothing. Switch the default to auto_discover=True and have the registry log the diff vs FEATURE_MODULES at startup so missed registrations are visible.
+________________________________________
+🧪 10. MULTI-TASK FAILURES
+•	All bias_*, emotion_*, propaganda_*, narrative_* extractors return flat dicts with task-prefixed keys (bias_…, emotion_…). The fusion concat works for binary/multi-class tasks because the schema validator gates on the prefix.
+•	Failure mode: Multi-label tasks (emotion_0..emotion_19, hero/villain/victim) require vector outputs, but emotion_features.py:158 emits one-hot scalars emotion_dominant_<label> per dominant — sparse columns most rows = 0. For multi-label this drops the per-label score entirely and only keeps the argmax. The model head expects per-label intensity.
+•	Fix: Change emotion_features to return one numeric column per emotion label (emotion_score_anger, emotion_score_fear, …, 20 labels), populated with the lexicon score even when not dominant. Drop the one-hot column.
+________________________________________
+🧪 11. EDGE CASE FAILURES
+Edge case	File	Behavior	Fix
+Empty text	bias_features.py::extract	Returns {} (good) but downstream fusion concat does not zero-fill missing keys → schema mismatch in batch.	Have BaseFeature always return a fixed-key dict, with NaN sentinels imputed by the validator.
+Only-punctuation text ("!!!???")	lexical_features.py	_tokenize returns []; entropy / np.log(0) div by EPS (§3.3).	Fix per §3.3.
+Unicode / non-ASCII	All re.findall(r"[A-Za-z']+") (e.g. bias_features.py:25)	Strips all non-ASCII letters → French/German/Spanish articles tokenize empty.	Switch to re.findall(r"\w+", text, flags=re.UNICODE) and lowercase via str.casefold() for proper Unicode case folding.
+Repeated single token ("buy buy buy buy")	lexical_features.py:82	len(probs) == 1 → entropy / log(EPS) blows up.	Fix per §3.3.
+Extremely long text (>50k tokens)	syntactic_features.py:118	Python depth loop O(N·D) — seconds per article.	Fix per §2.6 + cap at max_tokens.
+Spacy unavailable	narrative_role_features.py:60-66 and syntactic_features.py:171-177	All features → 0.0 cliff (§3.6).	Drop keys, impute via scaler.
+Missing tokenizer	emotion_intensity_features.py	Likely raises uncaught.	Wrap in try/except and degrade to lexicon-only with transformer_available=0.0 indicator.
+________________________________________
+✅ 12. VERIFIED COMPONENTS
+These are working as advertised — keep them:
+•	src/features/base/feature_registry.py — actually used by pipelines for dispatch (not hardcoded imports). ✅
+•	src/features/base/base_feature.py::BaseFeature._validate_output — NaN/Inf rejection works. ✅
+•	src/features/cache/cache_manager.py — LRU with thread-safe namespace creation. ✅
+•	src/features/cache/feature_cache.py — atomic disk write via os.replace (modulo §1.5/§7.3). ✅
+•	src/features/cache/feature_cache.py — feature_set_fingerprint correctly invalidates on registry change. ✅
+•	src/features/analysis/analysis_adapter_features.py — proper context.get_cache(self.cache_key) reuse, the only adapter that gets caching right; treat as the reference implementation for §1.3 fix. ✅
+•	src/features/feature_schema.py + feature_schema_validator.py — single source of truth for feature names → model heads. ✅
+•	src/features/pipelines/batch_feature_pipeline.py::_compute_embeddings — actually GPU-batched. ✅
+________________________________________
+📉 13. FINAL SCORE
+Score: 5.5 / 10
+Why not higher:
+1.	No fitted feature scaler — every extractor invents its own normalization (§1.1, §3.1, §3.7).
+2.	The "batch" pipeline is per-sample for everything except embeddings (§1.4, §2.1).
+3.	Lexicon scoring is Python loops over tokens (§2.1) — the single biggest perf win is here.
+4.	Cache key is incomplete: missing tokenizer ID, missing graph-config fingerprint (§1.2, §7.1).
+5.	Duplicate spaCy loads (§1.7), duplicate entropy (§4), duplicate caps_ratio (§4) — recomputation everywhere.
+6.	Token alignment between regex-word, BPE, and spaCy streams is undocumented (§5).
+7.	Several registered modules are never consumed (§8).
+8.	Unicode tokenization regex strips non-ASCII (§11) — the system is silently English-only.
+Steps to ≥ 9.5 (in priority order):
+1.	(1 day) Implement FeatureScaler in fusion/feature_scaling.py, fit on training matrix, persist beside the model checkpoint, plug into pipeline. Delete every /20.0, /10.0, sum-to-one local normalization. Delete FeatureFusion._normalize.
+2.	(1 day) Vectorize lexicon scoring: precompiled regex per category OR np.isin + lookup table. Override BaseFeature.extract_batch for every lexicon extractor. Wire FeaturePipeline.batch_extract to dispatch through extract_batch.
+3.	(½ day) One FeatureContext.tokens_word + tokens_bpe computed once at the top of the pipeline. Remove per-feature _tokenize calls. Fix unicode regex.
+4.	(½ day) Fix entropy log(0) (§3.3), polarity clip (§3.4), syntactic depth memoization (§2.6).
+5.	(½ day) Replace every spacy.load in src/features/ with get_shared_nlp().
+6.	(½ day) Fix _graph_cache_key to include graph config; eliminate the double graph extraction in _merge_graph_features. Promote graph error log to warning.
+7.	(½ day) Add tokenizer_id + lexicon SHAs to cache fingerprint; bump CACHE_VERSION to v3; add disk-cache pruner.
+8.	(½ day) Merge feature_pruning.py ↔ fusion/feature_selection.py → fusion/feature_reduction.py. Run correlation prune at threshold 0.9 on training matrix; persist kept-names.
+9.	(¼ day) Move HybridTruthLensModel out of fusion/feature_scaling.py; rename utills/ → utils/.
+10.	(¼ day) Wire discourse_features + argument_structure_features into BiasProfileBuilder (or de-register).
+11.	(¼ day) Multi-label fix in emotion_features.py: emit per-label scalar columns, drop one-hot dominant.
+Total: ~5-6 engineering days to reach ≥ 9.5.
+________________________________________
+This is a read-only audit — no files were modified. Want me to proceed with any of the fix items above? My recommendation is to start with item 1 (FeatureScaler) and item 2 (lexicon vectorization), which together unlock the largest signal + perf gains.
+

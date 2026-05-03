@@ -1,0 +1,288 @@
+Got it—now you want the **same level of rigor for the modeling layer**. This is actually the most critical doc, because it defines **training logic, architecture, and inference behavior**.
+
+Here’s a **production-grade prompt** for generating `models.md` for your `src/models` 👇
+
+---
+
+## 🔧 Prompt: Generate `models.md` for `src/models`
+
+You are a senior ML engineer, deep learning architect, and technical documentation expert with strong experience in building and deploying production-grade models.
+
+Your task is to generate a COMPLETE, PRODUCTION-GRADE documentation file named `models.md` for the `src/models` folder of a machine learning repository.
+
+---
+
+## 🎯 Objective
+
+Create a highly structured and technically rigorous document that enables any ML engineer or reviewer to:
+
+* Fully understand model architecture and design choices
+* Trace training, validation, and inference workflows
+* Understand how inputs (features) are transformed into predictions
+* Identify performance considerations and limitations
+* Safely modify, retrain, or extend the model
+
+---
+
+## 📁 Scope
+
+Analyze ALL files inside:
+src/models/
+
+Include:
+
+* Every Python file
+* Subfolders (if any)
+* Model checkpoints, loaders, and utilities
+
+---
+
+## 📚 Required Output Structure (STRICT)
+
+### 1. Overview
+
+* Purpose of `src/models`
+* Role in ML pipeline (features → predictions)
+* Relationship with:
+
+  * `src/features`
+  * `src/training`
+  * `src/inference`
+  * `src/evaluation`
+
+---
+
+### 2. Folder Architecture
+
+* Tree structure of `src/models`
+* One-line explanation per file/module
+
+Example:
+src/models/
+├── model.py              → Core model architecture
+├── layers.py             → Custom layers
+├── loss.py               → Loss functions
+├── utils.py              → Helper utilities
+...
+
+---
+
+### 3. Model Architecture
+
+* Detailed description of model(s):
+
+  * Type (e.g., Transformer, CNN, XGBoost, etc.)
+  * Input/output structure
+  * Layer-by-layer breakdown
+  * Activation functions
+  * Regularization techniques (dropout, batchnorm, etc.)
+
+* Include:
+
+  * Data flow through model
+  * Diagram-style explanation (textual)
+
+---
+
+### 4. End-to-End Model Workflow
+
+* Step-by-step:
+
+  * Input features
+  * Forward pass
+  * Loss computation
+  * Backpropagation (if applicable)
+  * Output predictions
+
+* Describe interaction with training/inference pipelines
+
+---
+
+### 5. File-by-File Deep Dive
+
+For EACH file:
+
+#### File: <filename.py>
+
+**Purpose**
+
+* Why this file exists
+
+**Key Functions / Classes**
+For each:
+
+* Name
+* Inputs (types + shapes)
+* Outputs (types + shapes)
+* Step-by-step logic
+* Important implementation details
+
+**Dependencies**
+
+* Internal modules
+* External libraries (PyTorch, TensorFlow, sklearn, etc.)
+
+**Performance Notes**
+
+* GPU usage
+* Mixed precision (fp16/bf16)
+* Memory considerations
+
+---
+
+### 6. Model Inputs & Outputs
+
+* Input feature format:
+
+  * Shape, type, preprocessing expectations
+* Output format:
+
+  * Probabilities, logits, labels, embeddings, etc.
+
+---
+
+### 7. Loss Functions & Optimization
+
+* Loss function(s) used:
+
+  * Formula + intuition
+* Optimizer(s):
+
+  * Adam, SGD, etc.
+* Learning rate scheduling
+* Regularization strategies
+
+---
+
+### 8. Training Integration
+
+* How models are used in training:
+
+  * Trainer interaction
+  * Batch flow
+  * Checkpointing
+
+---
+
+### 9. Inference Logic
+
+* How predictions are generated
+* Preprocessing before inference
+* Postprocessing after inference
+* Latency considerations
+
+---
+
+### 10. Model Checkpoints & Persistence
+
+* How models are saved/loaded
+* File formats (.pt, .pth, .bin, etc.)
+* Versioning strategy
+
+---
+
+### 11. Config Integration
+
+* Hyperparameters from config:
+
+  * Learning rate, batch size, layers, etc.
+* How configs control architecture or behavior
+
+---
+
+### 12. Optimization & Efficiency
+
+* GPU/TPU usage
+* Gradient checkpointing
+* Batching strategies
+* Inference optimization (quantization, pruning if any)
+
+---
+
+### 13. Extensibility Guide
+
+* How to modify architecture
+* How to add new model variants
+* Where to plug custom layers or losses
+
+---
+
+### 14. Common Pitfalls / Risks
+
+* Overfitting
+* Vanishing/exploding gradients
+* Data mismatch issues
+* Incorrect input shapes
+* Inference-training mismatch
+
+---
+
+### 15. Example Usage
+
+* Minimal example:
+
+  * Load model
+  * Pass input
+  * Get output
+
+---
+
+## ⚠️ Constraints
+
+* DO NOT skip any file
+* DO NOT give vague explanations
+* DO NOT assume undocumented behavior
+* Be precise and implementation-aware
+
+---
+
+## 💡 Style Guidelines
+
+* Clean markdown formatting
+* Use tables where helpful
+* Use code blocks for clarity
+* Keep explanations concise but deep
+
+---
+
+## 🚀 Goal
+
+After reading `models.md`, a developer should:
+
+* Understand the model architecture completely
+* Reproduce forward pass without reading code
+* Safely retrain or modify the model
+* Debug model-related issues confidently
+
+---
+
+## 💡 Why this is powerful
+
+This prompt forces:
+
+* **Architecture-level clarity (critical for viva/demo)**
+* **Training + inference separation (very important)**
+* **Hyperparameter transparency**
+* **Deployment readiness understanding**
+
+---
+
+## 🚀 Bonus (very useful for your project)
+
+Since you're doing a college demo, I strongly recommend adding this line at the end of your prompt:
+
+```
+Also include a "Simple Explanation (For Non-Technical Reviewers)" section that explains the model in plain language.
+```
+
+That alone can **boost your evaluation significantly**.
+
+---
+
+If you want next step, I can generate:
+
+* 🔥 `training.md` (trainer, loops, epochs, logs)
+* ⚡ `inference.md` (API-ready prediction flow)
+* 📊 `explainability.md` (very important for your TruthLens project)
+
+Just tell me 👍

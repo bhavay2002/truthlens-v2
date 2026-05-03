@@ -1,0 +1,255 @@
+You’re not hitting a runtime bug — your config is simply **not being honored by the trainer**.
+
+From your logs :
+
+```text
+Epoch 1/1
+```
+
+👉 That means your trainer is **explicitly receiving `num_epochs = 1`**, regardless of what you think you set.
+
+---
+
+# 🔍 Root Cause (most likely)
+
+Given your architecture (`create_trainer_fn` per task), one of these is happening:
+
+## 1. ❌ Config not passed into trainer
+
+Somewhere:
+
+```python
+Trainer(..., num_epochs=1)
+```
+
+OR default:
+
+```python
+num_epochs = config.get("epochs", 1)
+```
+
+👉 If key mismatch → fallback to `1`
+
+---
+
+## 2. ❌ Wrong config key
+
+You might have:
+
+```yaml
+epochs: 5
+```
+
+But code expects:
+
+```python
+num_epochs
+```
+
+OR:
+
+```python
+train_epochs
+```
+
+---
+
+## 3. ❌ CLI / override resetting it
+
+If you use argparse / hydra:
+
+```bash
+python train.py --epochs 1
+```
+
+👉 overrides config silently
+
+---
+
+## 4. ❌ Per-task trainer resets epochs
+
+You are doing:
+
+```text
+bias → trainer → 1 epoch
+ideology → trainer → 1 epoch
+...
+```
+
+👉 So each task runs **1 epoch independently**
+
+---
+
+# 🚨 Second Issue: “training off”
+
+From logs:
+
+```text
+SYSTEM COMPLETED SUCCESSFULLY
+```
+
+👉 Training didn’t stop early — it **finished exactly what it was told to do**
+
+---
+
+# ✅ Fix (precise)
+
+## 🔧 Step 1 — Find where epochs are set
+
+Search your repo:
+
+```bash
+grep -r "epoch" src/
+```
+
+Look for:
+
+```python
+num_epochs=
+epochs=
+max_epochs=
+```
+
+---
+
+## 🔧 Step 2 — Force override (quick test)
+
+In trainer creation:
+
+```python
+trainer = Trainer(
+    ...,
+    num_epochs=5   # HARD SET
+)
+```
+
+If it now shows:
+
+```text
+Epoch 1/5
+```
+
+👉 you confirmed config issue
+
+---
+
+## 🔧 Step 3 — Fix config mapping
+
+Make sure:
+
+### YAML / config:
+
+```yaml
+training:
+  num_epochs: 5
+```
+
+### Code:
+
+```python
+num_epochs = config["training"]["num_epochs"]
+```
+
+---
+
+## 🔧 Step 4 — Verify per-task loop
+
+Your main loop:
+
+```python
+for task in tasks:
+    trainer = create_trainer_fn(task)
+    trainer.train()
+```
+
+👉 This means:
+
+* 5 tasks × 1 epoch each
+* NOT 5 epochs total
+
+---
+
+### If you want 5 epochs per task:
+
+Make sure trainer uses:
+
+```python
+for epoch in range(num_epochs):
+```
+
+---
+
+# ⚠️ Hidden Design Problem
+
+Even if you fix this:
+
+👉 You will get:
+
+```text
+bias → 5 epochs
+ideology → 5 epochs
+...
+```
+
+But still:
+
+* ❌ No shared learning
+* ❌ 5x compute cost
+
+---
+
+# 🧠 Recommended Fix (better than just epochs)
+
+Instead of:
+
+```text
+5 epochs × 5 tasks = 25 passes ❌
+```
+
+Do:
+
+```text
+1 unified model × 5 epochs ✅
+```
+
+---
+
+# 🧪 Quick Debug Checklist
+
+Add this print before training:
+
+```python
+print("DEBUG EPOCHS:", trainer.num_epochs)
+```
+
+---
+
+# 🚀 Bottom Line
+
+* Your system is behaving **correctly**
+* Your config is **not wired correctly**
+* Epoch count is **defaulting to 1**
+
+---
+
+# 🚀 If you want next step
+
+I can:
+
+### 🔧 Fix config plumbing (fast)
+
+→ ensure epochs propagate correctly
+
+### 🧠 OR upgrade you properly:
+
+→ convert to **true multi-task training (5 epochs shared)**
+
+---
+
+Just say:
+
+👉 **“fix config”**
+or
+👉 **“make it true multitask 5 epochs”**
+
+and I’ll give you exact code.

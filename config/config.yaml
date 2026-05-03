@@ -1,0 +1,599 @@
+#config\config.yaml
+
+# =========================================================
+# GLOBAL
+# =========================================================
+
+project:
+  name: "TruthLens"
+  seed: 42
+
+# =========================================================
+# TRAINING
+# =========================================================
+
+training:
+  # MIN-EPOCH-EARLY-STOPPING: ``epochs`` is now the *upper bound*
+  # (max_epochs); the trainer always runs at least ``min_epochs`` before
+  # any early-stop check, then continues up to ``epochs`` only if the
+  # monitored validation metric keeps improving (with ``patience`` epochs
+  # of grace). Wired by ``create_multitask_trainer_fn`` →
+  # ``Trainer.params_override``.
+  epochs: 10
+  min_epochs: 4
+  log_every: 50
+  eval_every: 1
+  checkpoint_every: 500
+  # GRAD-ACCUM-4: doubled again from 2 → 4 (effective batch ≈ 256 with
+  # data.batch_size=64). The previous 2× still left grad_norm bouncing
+  # 9 → 47 → 159 → 75 across consecutive steps; averaging across 4
+  # micro-batches damps the per-step variance further so the optimiser
+  # sees a smoother gradient signal.
+  # POST-CONVERGENCE-FIX-V5: lowered 4 → 2 in tandem with
+  # ``data.batch_size: 64 → 32`` below. New effective batch = 32 × 2
+  # = 64 (was 64 × 4 = 256). The 256 effective batch was driving the
+  # post-convergence stagnation: with so many samples averaged before
+  # each optimiser step the model only saw ~1/4 as many feedback
+  # cycles per epoch, so per-task convergence rates diverged (the
+  # easy heads saturated while the hard heads — ideology — barely
+  # moved). The smaller effective batch trades a bit of gradient
+  # smoothness for 4× more update steps per epoch, which the new
+  # max_grad_norm=1.0 + spike_warn_threshold=100 + LR=1.75e-6 stack
+  # is now stable enough to absorb.
+  gradient_accumulation_steps: 2
+  # MIN-EPOCH-EARLY-STOPPING: tightened from 5 → 2 so the trainer
+  # stops promptly once improvement stalls past min_epochs.
+  early_stopping_patience: 2
+  # POST-CONVERGENCE-FIX: ``min_epochs`` raised from the implicit 1
+  # default to 4 so early stopping is free to fire from epoch 5
+  # onwards. The audit log showed every multi-task run peaks at
+  # epoch 4 (emotion 0.691, propaganda 0.96) and then enters a
+  # post-convergence instability regime where gradient norms
+  # explode (174→453) and per-task scores oscillate without true
+  # generalisation — see the EXPLOSION-WATCHDOG comments below and
+  # spike_warn_threshold in src/training/training_step.py. Combined
+  # with patience=2 + min_delta=0.003 this means the trainer commits
+  # to running at least 4 epochs, then bails after 2 consecutive
+  # epochs without a real improvement — which targets epoch 4–6 as
+  # the natural stop point.
+  min_epochs: 4
+  # MIN-DELTA: a validation score must improve by AT LEAST this much
+  # over the running best to count as "improved" — otherwise the
+  # patience counter increments. Without it, multi-task validation noise
+  # in the ±0.001 band oscillates above and below the previous best
+  # forever, perpetually resetting the counter and making early stopping
+  # a no-op. POST-CONVERGENCE-FIX: lifted from 0.002 → 0.003 because
+  # per-epoch noise on the weighted_composite_score was observed
+  # crossing the old 0.002 band on noise alone (0.689 ↔ 0.691 ↔ 0.689),
+  # which kept resetting the patience counter and made early stopping
+  # ineffective in the post-epoch-4 instability regime. 0.003 sits
+  # one band above the observed noise floor.
+  early_stopping_min_delta: 0.003
+  # GRAD-CLIP-1: explicit hard cap on the L2 norm of the full parameter
+  # gradient. ``TrainingStep`` already calls ``clip_grad_norm_`` whenever
+  # this is non-zero; setting it here keeps the value tunable from YAML.
+  max_grad_norm: 1.0
+  # SPIKE-LR-DISABLED: setting the factor to 1.0 makes the per-step
+  # reactive LR reducer a no-op (lr *= 1.0). ``TrainingStep._reduce_lr``
+  # ALSO short-circuits when ``factor >= 1.0`` so we don't even pay for
+  # the warning log. The reactive decay loop was running on every other
+  # step ("LR reduced (factor=0.900) due to instability") and steadily
+  # zeroing the LR on top of the cosine schedule. Real instability is
+  # now handled by gradient clipping (max_grad_norm=1.0) and the
+  # smoother grad_accum=4 averaging instead. Set to <1.0 to bring it
+  # back if you ever need it.
+  spike_lr_scale: 1.0
+  # EXPLOSION-WATCHDOG: pre-clip gradient L2 norm above which
+  # ``TrainingStep.run`` logs a ``Gradient spike detected`` warning
+  # (uses the value returned by ``clip_grad_norm_`` BEFORE clipping,
+  # so it always reflects the true magnitude of the would-be step).
+  # The clipper above (``max_grad_norm``) silently caps the step;
+  # this knob is the *visibility* counterpart so post-convergence
+  # instability ("174 → 206 → 245 → 290 → 382 → 453") shows up loud
+  # in the trainer log instead of being hidden by the silent clip.
+  # Set to 0.0 to disable. Default 100.0 is calibrated against the
+  # post-fix-V4 healthy-training band (≪ 100); anything above is
+  # worth surfacing to the operator.
+  spike_warn_threshold: 100.0
+
+  # POST-CONVERGENCE-FIX-V5: EXPLOSION-WATCHDOG-RESPONSE — factor
+  # applied to every optimiser ``param_group['lr']`` (and
+  # ``scheduler.base_lrs`` so the cosine LambdaLR doesn't immediately
+  # overwrite it) the first time the watchdog fires on a given step.
+  # The ``spike_warn_threshold`` knob above is detection-only;
+  # ``spike_decay_factor`` is the *response*. Independent from the
+  # legacy ``spike_lr_scale`` (which is wired into the
+  # instrumentation/monitor REDUCE_LR pathway and currently disabled
+  # at 1.0 in TrainingStepConfig). Set to 1.0 to keep the
+  # warning-only behaviour. ``_reduce_lr`` short-circuits on
+  # values >=1.0 so a mistuned 1.5 is a no-op rather than an
+  # LR-runaway hazard.
+  #
+  # POST-CONVERGENCE-FIX-V6: relaxed 0.7 → 0.85. The 0.7 value (= -30%
+  # per spike) compounded too aggressively when the watchdog fired on
+  # consecutive steps — three back-to-back spikes collapsed the LR by
+  # ~66% in <100 steps, which then prevented the model from learning
+  # out of the post-spike plateau and contributed to the "stops
+  # improving at epoch 4" symptom that motivated the V6 audit. 0.85
+  # (= -15% per spike) is half as severe and lets the model continue
+  # learning between spike events while still applying a meaningful
+  # brake. Pairs with ``spike_skip_threshold`` below: moderate spikes
+  # (100 < grad_norm <= 150) trigger LR decay only; extreme spikes
+  # (grad_norm > 150) ALSO discard the corrupt update entirely.
+  spike_decay_factor: 0.85
+
+  # POST-CONVERGENCE-FIX-V6: EXPLOSION-WATCHDOG-SKIP — pre-clip
+  # gradient L2 norm above which TrainingStep.run discards the
+  # optimiser step entirely (calls ``scaler.update()`` to drain AMP
+  # state, but skips ``scaler.step()`` / ``optimizer.step()`` /
+  # ``scheduler.step()``; gradients are zeroed at end-of-step as
+  # usual so the next backward starts clean). Distinct from
+  # ``max_grad_norm`` (silent clip) and from ``spike_warn_threshold``
+  # (warn + LR decay only). Rationale: some spikes are numerically
+  # unrecoverable — the gradient direction is dominated by a few
+  # outlier components, so even a clipped step pushes the parameters
+  # in a corrupted direction. Skipping the step is cleaner than
+  # relying on LR reduction to attenuate the bad update.
+  # Layered on top of (not in place of) the warn + decay pathway
+  # above: a step at grad_norm=200 fires both — LR decays for the
+  # *next* step AND this step's update is dropped. Set to 0.0 to
+  # disable. Default 150.0 = 50% above ``spike_warn_threshold`` so
+  # the 100-150 band keeps using the gentle decay-only response and
+  # only true outliers (>150) trigger the heavier skip action.
+  spike_skip_threshold: 150.0
+
+# =========================================================
+# OPTIMIZATION
+# =========================================================
+
+optimizer:
+  name: "adamw"
+  # LR-LOWERED-V3: halved AGAIN from 5e-6 → 2.5e-6. The previous
+  # 5e-6 + grad_accum=4 + clip=1.0 + cosine + EMA-alpha=0.05 stack
+  # damped the high-frequency oscillations but the per-step grad
+  # norm was still cycling 178 → 227 → 365 → 288 → 256 → 184. Norms
+  # >300 are deep in "loss-surface too sharp for current LR"
+  # territory, so we halve once more. Empirically the right LR for
+  # this multitask mix lives somewhere between 1e-6 and 5e-6 — this
+  # is the next bisection step. If grad norms still cycle >100 after
+  # this, the next lever is per-task gradient balancing (GradNorm /
+  # PCGrad), not another LR cut.
+  # POST-CONVERGENCE-FIX-V4: lowered another 30% (×0.7) from
+  # 2.5e-6 → 1.75e-6. Even after V3 the live training log still
+  # showed grad-norm spikes of 174 → 206 → 217 → 245 → 290 → 382 →
+  # 453 in the post-epoch-4 regime — i.e. the LR is still aggressive
+  # enough that once the model nears its optimum the curvature it
+  # sees is too sharp for the step size, so each step ricochets
+  # across the basin instead of settling. Combined with the new
+  # ``spike_warn_threshold=100`` in ``TrainingStepConfig`` and
+  # ``min_epochs=4 + patience=2 + min_delta=0.003`` early-stopping
+  # gates this should keep the model anchored near its epoch-4
+  # peak instead of wandering through stochastic fluctuation.
+  lr: 1.75e-6
+  weight_decay: 0.01
+
+scheduler:
+  # COSINE-SCHED: switched from "linear" → "cosine" so the LR
+  # decays smoothly toward zero across the full training run instead
+  # of in straight-line steps. Combined with SPIKE-LR-DISABLED above
+  # this gives a single, predictable LR trajectory (warmup → cosine
+  # decay) rather than the previous "linear schedule + reactive
+  # halving" interaction that produced unpredictable LR values mid-run.
+  name: "cosine"
+  step_mode: "step"   # step | epoch | metric
+  warmup_steps: 1000
+
+# =========================================================
+# MIXED PRECISION
+# =========================================================
+
+precision:
+  use_amp: true
+  amp_dtype: "bf16"   # bf16 | fp16
+  allow_tf32: true
+
+  # POST-CONVERGENCE-FIX-V5: AMP-INIT-SCALE-FIX — overrides
+  # ``GradScaler(init_scale=...)``; torch's default is 2**16 = 65536.
+  # 1024 (= 2**10) suppresses the early-warmup "Gradient overflow
+  # detected, step skipped" warning storm on H100 / fp16 stacks
+  # without affecting the dynamic-loss-scaling steady state (the
+  # scaler doubles back up by powers of two on every consecutive
+  # non-overflowing step). NO-OP under the current ``amp_dtype:
+  # bf16`` setting because the scaler is constructed with
+  # ``enabled=False`` for bf16 — kept here so flipping ``amp_dtype``
+  # to fp16 picks up the audit-recommended value automatically
+  # instead of regressing to the noisy 65536 default.
+  grad_scaler_init_scale: 1024
+
+# =========================================================
+# MODEL
+# =========================================================
+
+model:
+  encoder: "roberta-base"
+  hidden_dim: 768
+  dropout: 0.1
+  gradient_checkpointing: true
+  flash_attention: true
+  # COMPILE-RE-ENABLED: ``torch.compile`` is wired back into the
+  # training-time ``optimize_model`` call site. The previous COMPILE-OFF
+  # gate was reverted at the user's explicit request — see the
+  # ``optimize_model`` body in src/training/training_setup.py for the
+  # current behaviour and the safety caveats (CPU-only environments
+  # see little-to-no speedup; bf16 AMP can re-surface
+  # ``Gradient overflow detected`` warnings on some kernels). The
+  # inference-time call sites (``model_loader``, ``feature_pipeline``,
+  # ``batch_feature_pipeline``) remain off — flipping this only affects
+  # training.
+  torch_compile: true
+  compile_mode: "default"
+
+# =========================================================
+# TASK CONFIG (CRITICAL)
+# =========================================================
+
+tasks:
+  # Each entry must declare ``type`` AND ``num_labels`` explicitly.
+  # The defaults in src/utils/config_loader._DEFAULT_NUM_LABELS are
+  # only a safety net — they cannot know that bias has 2 classes
+  # while ideology has 3, or that emotion has 20 multilabels while
+  # narrative has 3. Keeping these in sync with the dataset schema
+  # (see the per-task column lists in the project README) is what
+  # prevents shape mismatches between the model heads and the labels.
+  bias:
+    type: "multiclass"      # bias_label ∈ {0, 1}
+    num_labels: 2
+  ideology:
+    type: "multiclass"      # ideology_label ∈ {0, 1, 2}
+    num_labels: 3
+  propaganda:
+    type: "multiclass"      # propaganda_label ∈ {0, 1}
+    num_labels: 2
+  narrative:
+    type: "multilabel"      # columns: hero, villain, victim
+    num_labels: 3
+  narrative_frame:
+    type: "multilabel"      # columns: CO, EC, HI, MO, RE
+    num_labels: 5
+  emotion:
+    # EMOTION-11: reduced from 20 → 11 labels. Must match
+    # ``len(EMOTION_LABELS)`` in src/features/emotion/emotion_schema.py
+    # (the canonical source). The data contract's column list and the
+    # model head's output width both derive from that constant; this
+    # YAML field is the loss/metrics/eval surface and must be kept in
+    # sync. Update both together when changing the count.
+    type: "multilabel"      # columns: emotion_0 .. emotion_10
+    num_labels: 11
+
+# PER-TASK-WEIGHTS-V2: previously every task was weighted 1.0, which
+# let the larger-dataset heads (ideology ~46k, propaganda ~32k) dominate
+# the shared-encoder gradient and stall the smaller / harder heads
+# (emotion ~8k multilabel, narrative_frame multilabel). The values below
+# upweight the under-fitted heads and downweight the dominant ones; see
+# ``src/training/loss_engine.py`` (``LossEngineConfig.task_weights``)
+# and ``src/data_processing/multitask_loader.py`` (sampling) — both
+# read this same dict so the rebalancing applies to BOTH the per-task
+# loss multiplier AND the per-task batch sampling probability.
+task_weights:
+  # TASK-WEIGHT-REBALANCE: lowered emotion 2.0 → 1.5. At 2.0 the
+  # multilabel-BCE emotion head was producing the largest single-task
+  # gradient contribution every step, dominating the multitask
+  # gradient mix and driving the observed >300 grad-norm spikes.
+  # 1.5 keeps emotion as the most-weighted task (it is the hardest /
+  # most-imbalanced label space) but stops it from drowning out the
+  # other heads' gradient signal.
+  # POST-CONVERGENCE-FIX-V2 (emotion): lowered another notch
+  # 1.5 → 1.3. Emotion already converges by epoch 4 (0.691 score)
+  # and continues to dominate the gradient mix once the easier
+  # heads saturate. Trimming to 1.3 keeps it the joint-largest
+  # weight (tied with the new narrative_frame/ideology levels)
+  # but leaves room for the under-trained heads (ideology) to
+  # actually move the shared encoder.
+  emotion: 1.3
+  # POST-CONVERGENCE-FIX-V2 (ideology): raised 0.7 → 1.1 because
+  # ideology is the lagging task in the audit log (0.448 → 0.557
+  # across 6 epochs vs. propaganda already saturating at 0.96 by
+  # epoch 1). The previous 0.7 weight was actively *under-training*
+  # the hardest head — its loss contribution was small enough that
+  # the shared encoder gradient was dominated by emotion / propaganda
+  # signals that had nothing left to teach it. >1.0 flips that and
+  # makes ideology the head that drives shared-encoder updates in
+  # the late-training regime, which is exactly what the lagging
+  # learning curve calls for.
+  ideology: 1.1
+  narrative: 1.0
+  bias: 1.0
+  # TASK-WEIGHT-REBALANCE: lowered narrative_frame 1.5 → 1.2 in the
+  # same spirit as the emotion change above. narrative_frame is also
+  # multilabel and was the second-largest contributor to the
+  # gradient-norm spikes. 1.2 still flags it as "harder than baseline"
+  # without amplifying its gradient noise into the shared backbone.
+  narrative_frame: 1.2
+  # POST-CONVERGENCE-FIX-V2 (propaganda): lowered 0.8 → 0.7 because
+  # propaganda saturates earliest (val_score 0.92 at epoch 1, 0.96
+  # by epoch 4) — past that point its loss is essentially zero
+  # information for the shared encoder, so any non-trivial weight
+  # on it just adds noise. 0.7 keeps the head fine-tuning gently
+  # on top of an already-solved task without crowding the shared
+  # gradient budget that ideology / emotion still need.
+  propaganda: 0.7
+
+# POST-CONVERGENCE-FIX-V5 (MONITOR-WEIGHTS): per-task weights that
+# drive the ``weighted_composite_score`` early-stopping metric,
+# DECOUPLED from the loss ``task_weights`` above. The two answer
+# different questions:
+#   * ``task_weights`` balances *gradient flow into the shared
+#     encoder* — under-trained heads get upweighted (e.g. ideology
+#     0.7 → 1.1 because it lags). Tuned for *training dynamics*.
+#   * ``monitor_task_weights`` answers "which heads should drive
+#     the early-stopping decision?" — typically the heads that
+#     represent the application objective (emotion / ideology /
+#     narrative are user-facing; bias / propaganda are gating
+#     signals; narrative_frame is a research-only head we don't
+#     want stalling early stopping). Tuned for *product priority*.
+# Mixing the two means a rebalanced loss weight (e.g. ideology
+# 0.7 → 1.1) silently shifts the early-stopping target — exactly
+# the failure mode this block exists to prevent.
+#
+# Tasks omitted from this mapping are excluded from the composite
+# (``narrative_frame`` is excluded by being absent). Weights are
+# normalised by the sum of CONTRIBUTING task weights inside
+# ``Trainer._inject_weighted_composite``, so the absolute values
+# matter only as ratios — these sum to 1.0 for readability.
+monitor_task_weights:
+  emotion: 0.4
+  ideology: 0.2
+  narrative: 0.2
+  bias: 0.1
+  propaganda: 0.1
+
+# =========================================================
+# LOSS
+# =========================================================
+
+loss:
+  ignore_index: -100
+  validate_loss: true
+  # NORMALIZER-ALPHA-DAMP: lowered from default 0.1 → 0.05 so the
+  # ``EMALossNormalizer`` running mean responds half as fast to per-step
+  # loss fluctuations. With six tasks of very different scales (multilabel
+  # BCE on emotion vs. multiclass CE on bias) the previous 0.1 alpha let
+  # one noisy batch swing the per-task normalisation factor and ripple
+  # into the next step's effective task weights, which contributed to
+  # the gradient-norm oscillations. 0.05 ≈ longer EMA window → smoother
+  # normalisation → calmer gradients.
+  normalizer_alpha: 0.05
+
+# =========================================================
+# DATALOADER
+# =========================================================
+
+data:
+  # POST-CONVERGENCE-FIX-V5: lowered 64 → 32 in tandem with
+  # ``training.gradient_accumulation_steps: 4 → 2`` above. New
+  # effective batch = 32 × 2 = 64. See the comment on the
+  # gradient_accumulation_steps key for the full rationale.
+  batch_size: 32
+  num_workers: 8
+  pin_memory: true
+  shuffle: true
+
+# =========================================================
+# DISTRIBUTED (DDP)
+# =========================================================
+
+distributed:
+  use_ddp: true
+  # CONFIG FIX: "nccl" requires CUDA and fails on CPU-only environments.
+  # Use "gloo" which works across CPU and GPU.  Switch to "nccl" only when
+  # running on multi-GPU hardware for optimal bandwidth.
+  backend: "gloo"
+  find_unused_parameters: false
+
+# =========================================================
+# MONITORING
+# =========================================================
+
+monitoring:
+  spike_threshold: 3.0
+  ema_alpha: 0.1
+  health_threshold: 0.3
+  grad_monitor_interval: 200
+
+# =========================================================
+# CHECKPOINTING
+# =========================================================
+
+checkpoint:
+  dir: "checkpoints/"
+  max_checkpoints: 3
+  # WEIGHTED-COMPOSITE-METRIC: ``weighted_composite_score`` is a
+  # synthetic key the Trainer adds to ``val_metrics`` after every
+  # evaluation pass — it is the weighted average of the per-task
+  # ``{task}_score`` values (bias_score, ideology_score, …) using the
+  # same ``task_weights`` block defined elsewhere in this file. This
+  # makes early stopping & best-checkpoint selection track the
+  # *task-balanced* signal that matches the training objective, instead
+  # of ``val_loss`` which is dominated by the easy heads. The Trainer
+  # falls back to leaving val_metrics untouched if no per-task scores
+  # are present (e.g. single-task runs); switch back to "val_loss" /
+  # mode "min" if you ever need the legacy behaviour.
+  monitor_metric: "weighted_composite_score"
+  mode: "max"
+
+# =========================================================
+# EVALUATION
+# =========================================================
+
+evaluation:
+  device: "cuda"
+
+# =========================================================
+# FEATURES
+# =========================================================
+# Audit fix §9 — single source of truth for the feature pipeline
+# bootstrap. The previous bootstrap had no config knob and silently
+# defaulted to ``auto_discover=True``, which on a partial codebase
+# would import (and register) features the rest of the pipeline did
+# not know about. Every knob below is read by feature_bootstrap and
+# logged at startup.
+
+features:
+  # Hard-fail (rather than warn) when any module in FEATURE_MODULES
+  # cannot be imported. Production should set this to true.
+  strict: false
+
+  # When true, feature_bootstrap walks ``auto_package`` with
+  # ``FeatureRegistry.auto_discover`` *in addition* to the manual
+  # FEATURE_MODULES list. Off by default — the manual list is the
+  # source of truth.
+  auto_discover: false
+  auto_package: "src.features"
+
+  # Apply scaler at inference (StandardScaler / RobustScaler etc.).
+  # Optional — set null to skip.
+  scaler: null
+
+  # In-process LRU caps (audit §7.6).
+  cache:
+    max_memory_items: 10000
+    max_memory_bytes: 536870912   # 512 MiB
+
+# =========================================================
+# GRAPH LAYER  (audit §8 — single source of truth)
+# =========================================================
+# Every knob the graph pipeline reads. Defaults below match what the
+# old hardcoded ``__init__`` calls used, so removing this block does
+# not change behaviour. ``GraphConfigLoader`` validates each field at
+# load time and ``GraphPipeline`` translates them via
+# ``GraphPipelineConfig.from_graph_config``.
+
+graph:
+  # toggles
+  enable_entity_graph: true
+  enable_narrative_graph: true
+  enable_temporal_graph: true
+  enable_graph_explainer: true
+
+  # runtime behaviour (G-CFG3)
+  return_vector: true
+  run_analysis_modules: true
+  batch_size: 32
+
+  # extraction (G-CFG2)
+  min_keyword_length: 4
+  max_keywords_per_sentence: 4
+  temporal_min_token_length: 4
+
+  # graph behavior
+  use_weighted_edges: true
+  normalize_graph: true
+
+  # thresholds
+  min_edge_weight: 0.0
+  max_edge_weight: 10.0
+
+  # scaling
+  feature_scale: 1.0
+
+  # embeddings (G-CFG2)
+  enable_graph_embeddings: false
+  embedding_type: "hybrid"   # degree | centrality | spectral | hybrid | node2vec
+  spectral_dim: 8
+  embedding_dim: 16
+  walk_length: 10
+  num_walks: 10
+
+  # explainer mixing weights (G-CFG2) — must sum to 1.0
+  explainer_node_weight: 0.4
+  explainer_edge_weight: 0.3
+  explainer_temporal_weight: 0.3
+
+# =========================================================
+# EXPERIMENT TRACKING
+# =========================================================
+
+tracking:
+  backend: "wandb"   # none | mlflow | wandb
+  project_name: "truthlens"
+  run_name: null
+  tags:
+    stage: "experiment"
+    version: "v1"
+
+# =========================================================
+# AGGREGATION (CFG-AG-6)
+#
+# The aggregation pipeline reads its own block from this file when
+# `load_aggregation_config(config/config.yaml)` is called. The keys
+# below mirror `src/aggregation/aggregation_config.AggregationConfig`
+# and override the in-code defaults. Leaving a key unset keeps the
+# default from `AggregationConfig`.
+# =========================================================
+
+aggregation:
+  config_version: v2
+
+  strict_mode: false
+  enable_logging: true
+  enable_explanations: true
+  enable_risk: true
+
+  batch_max_workers: 1
+
+  weights:
+    version: v2
+    allow_dynamic_adjustment: true
+    use_confidence: true
+    use_entropy: true
+    use_explainability: true
+    smoothing: 0.1
+
+  risk:
+    low_threshold: 0.30
+    medium_threshold: 0.60
+    uncertainty_penalty: 0.20
+
+  attribution:
+    method: integrated_gradients
+    top_k: 5
+    normalize: true
+    use_confidence_weighting: true
+    use_entropy_weighting: true
+
+  fusion:
+    graph_influence_cap: 0.10
+    explanation_blend: 0.50
+
+  uncertainty:
+    enable_entropy: true
+    track_percentiles: true
+    p95_threshold: 0.80
+    p99_threshold: 0.95
+
+  drift:
+    enabled: true
+    method: js
+    threshold: 0.10
+
+  monitoring:
+    enabled: true
+    track_latency: true
+    track_confidence: true
+    track_entropy: true
+
+# =========================================================
+# EXPLAINABILITY (CFG-3)
+#
+# Per-method fusion weights used by ExplanationAggregator.
+# Values are re-normalised to sum to 1.0 automatically; you
+# can therefore treat them as relative priorities.
+# =========================================================
+
+explainability:
+  aggregation_weights:
+    shap: 0.35
+    integrated_gradients: 0.25
+    attention: 0.20
+    lime: 0.10
+    graph: 0.10

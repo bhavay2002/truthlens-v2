@@ -1,0 +1,268 @@
+You are a senior ML engineer and MLOps specialist with deep expertise in training pipelines, optimization, and scalable model development.
+
+Your task is to generate a COMPLETE, PRODUCTION-GRADE documentation file named `training.md` for the `src/training` folder of a machine learning repository.
+
+---
+
+## 🎯 Objective
+
+Create a highly structured and technically rigorous document that enables any ML engineer to:
+
+* Fully understand the training pipeline and workflow
+* Reproduce the training process end-to-end
+* Debug training issues effectively
+* Tune hyperparameters and improve performance
+* Safely modify or extend the training system
+
+---
+
+## 📁 Scope
+
+Analyze ALL files inside:
+src/training/
+
+Include:
+
+* Every Python file
+* Subfolders (if any)
+* Trainer classes, scripts, utilities, callbacks, schedulers
+
+---
+
+## 📚 Required Output Structure (STRICT)
+
+### 1. Overview
+
+* Purpose of `src/training`
+* Role in ML pipeline (model learning phase)
+* Relationship with:
+
+  * `src/models`
+  * `src/features`
+  * `src/evaluation`
+  * `src/config`
+
+---
+
+### 2. Folder Architecture
+
+* Tree structure of `src/training`
+* One-line explanation per file/module
+
+Example:
+src/training/
+├── trainer.py           → Main training loop
+├── callbacks.py         → Early stopping, logging
+├── scheduler.py         → Learning rate scheduling
+...
+
+---
+
+### 3. End-to-End Training Pipeline
+
+* Step-by-step workflow:
+
+  * Load features/data
+  * Initialize model
+  * Define loss + optimizer
+  * Training loop (epochs, batches)
+  * Validation loop
+  * Checkpoint saving
+
+* Clearly describe:
+
+  * Execution order
+  * Module interactions
+  * Control flow
+
+---
+
+### 4. Training Loop Breakdown
+
+* Detailed explanation of:
+
+  * Forward pass
+  * Loss computation
+  * Backward pass
+  * Gradient updates
+  * Zeroing gradients
+
+* Include pseudocode-style explanation
+
+---
+
+### 5. File-by-File Deep Dive
+
+For EACH file:
+
+#### File: <filename.py>
+
+**Purpose**
+
+* Why this file exists
+
+**Key Functions / Classes**
+For each:
+
+* Name
+* Inputs (types + shapes)
+* Outputs
+* Step-by-step logic
+* Important implementation details
+
+**Dependencies**
+
+* Internal modules
+* External libraries (PyTorch, TensorFlow, etc.)
+
+**Performance Notes**
+
+* GPU usage
+* Mixed precision (fp16/bf16)
+* Batch handling
+
+---
+
+### 6. Loss Functions & Optimization
+
+* Loss function(s) used:
+
+  * Formula + intuition
+* Optimizer(s):
+
+  * Adam, SGD, etc.
+* Learning rate scheduling:
+
+  * StepLR, Cosine, Warmup, etc.
+
+---
+
+### 7. Hyperparameters
+
+Create a table:
+
+| Parameter | Value | Description |
+| --------- | ----- | ----------- |
+
+Include:
+
+* Learning rate
+* Batch size
+* Epochs
+* Weight decay
+* Dropout
+* Scheduler params
+
+---
+
+### 8. Validation Strategy
+
+* Train/validation split
+* Metrics used
+* Frequency of validation
+* Early stopping logic
+
+---
+
+### 9. Checkpointing & Logging
+
+* How models are saved
+* When checkpoints are triggered
+* Logging system (console, file, TensorBoard, etc.)
+* Metrics tracking
+
+---
+
+### 10. Config Integration
+
+* How configs control training
+* Hyperparameter injection
+* Environment setup
+
+---
+
+### 11. Optimization & Efficiency
+
+* GPU/TPU usage
+* Gradient accumulation
+* Mixed precision training
+* DataLoader optimizations
+* Multi-GPU / distributed training (if any)
+
+---
+
+### 12. Failure Handling & Debugging
+
+* Common errors:
+
+  * NaNs in loss
+  * Gradient explosion
+  * Overfitting
+* How the system detects and handles them
+
+---
+
+### 13. Extensibility Guide
+
+* How to modify training loop
+* How to add new callbacks
+* How to integrate new optimizers or schedulers
+
+---
+
+### 14. Common Pitfalls / Risks
+
+* Overfitting
+* Underfitting
+* Data leakage during training
+* Improper validation setup
+
+---
+
+### 15. Example Usage
+
+* Minimal example:
+
+  * Run training script
+  * Expected outputs/logs
+
+---
+
+## ⚠️ Constraints
+
+* DO NOT skip any file
+* DO NOT give vague explanations
+* DO NOT assume undocumented behavior
+* Be precise and implementation-aware
+
+---
+
+## 💡 Style Guidelines
+
+* Clean markdown formatting
+* Use tables for hyperparameters
+* Use pseudocode where helpful
+* Keep explanations concise but deep
+
+---
+
+## 🚀 Goal
+
+After reading `training.md`, a developer should:
+
+* Fully understand and reproduce training
+* Debug training issues confidently
+* Tune model performance effectively
+* Extend training logic safely
+
+---
+
+## ⭐ Bonus Requirement (IMPORTANT)
+
+Also include a section:
+
+### 16. Simple Explanation (For Non-Technical Reviewers)
+
+* Explain training in plain language
+* Avoid jargon
+* Describe what the model is “learning” and how

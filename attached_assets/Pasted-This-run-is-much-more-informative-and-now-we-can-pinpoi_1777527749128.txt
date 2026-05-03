@@ -1,0 +1,269 @@
+This run is **much more informative**—and now we can pinpoint the *real structural issues* in your pipeline. Let’s break it down precisely.
+
+---
+
+# 🚨 FINAL FAILURE (Root Cause)
+
+```text
+Expected all tensors to be on the same device, but found cuda:0 and cpu
+Sanity check: missing loss
+```
+
+📍 From your log: 
+
+---
+
+# 🧠 What Actually Broke
+
+This is **NOT memory**, NOT compile, NOT dataset.
+
+👉 This is a **device mismatch inside your forward/loss pipeline**
+
+---
+
+# 🔍 Why It Happened
+
+You already had warnings earlier:
+
+```text
+Trainer received model on cuda:0 but expected cuda
+optimizer may hold stale parameter refs
+```
+
+📍 This is the smoking gun. 
+
+---
+
+## ⚠️ The Real Bug (Architecture-level)
+
+Your flow is:
+
+1. ❌ Build model
+2. ❌ Build optimizer (captures CPU params)
+3. ❌ Move model to GPU
+4. ❌ Training step runs
+
+👉 Result:
+
+* Some tensors → **CPU**
+* Some tensors → **GPU**
+* Loss computation → 💥 crash
+
+---
+
+# 🔥 EXACT FAILURE POINT
+
+During **narrative task sanity check**:
+
+```text
+Skipping step due to RuntimeError...
+Expected all tensors to be on the same device
+```
+
+Then:
+
+```text
+Sanity check: missing loss
+```
+
+👉 Because forward pass **never completed**
+
+---
+
+# ⚠️ Secondary Issues (Also Important)
+
+## 1. ❌ You are loading ALL trainers at once
+
+```text
+Creating trainer | task=bias
+Creating trainer | task=ideology
+Creating trainer | task=propaganda
+...
+```
+
+👉 This is inefficient and risky (memory + device inconsistencies)
+
+---
+
+## 2. ❌ torch.compile failing
+
+```text
+Dynamo is not supported on Python 3.12+
+```
+
+👉 Not fatal, but noisy
+👉 Ignore for now
+
+---
+
+## 3. ⚠️ Gradient instability
+
+```text
+Gradient overflow detected
+LR reduced repeatedly
+```
+
+👉 Your LR / AMP scaling is aggressive
+
+---
+
+# ✅ FIX (Critical — must do)
+
+## 🔧 1. FIX DEVICE ORDER (MOST IMPORTANT)
+
+In `create_trainer_fn`:
+
+### ❌ WRONG
+
+```python
+model = build_model()
+optimizer = AdamW(model.parameters())
+model.to(device)
+```
+
+---
+
+### ✅ CORRECT
+
+```python
+model = build_model()
+model.to(device)  # 🔥 MOVE FIRST
+
+optimizer = AdamW(model.parameters())
+```
+
+---
+
+## 🔧 2. Ensure ALL tensors are on same device
+
+Inside training step:
+
+```python
+batch = {k: v.to(device) for k, v in batch.items()}
+```
+
+And ensure:
+
+* labels
+* masks
+* logits inputs
+
+ALL → `.to(device)`
+
+---
+
+## 🔧 3. Fix your warning properly
+
+You saw:
+
+```text
+prefer moving the model BEFORE building the optimizer
+```
+
+👉 That is not a suggestion. That is the bug.
+
+---
+
+# 🧠 STRONG RECOMMENDATION (Architecture Fix)
+
+## ❌ Current:
+
+* Multiple trainers created upfront
+* Device inconsistencies
+* Memory fragmentation
+
+---
+
+## ✅ Better:
+
+Train sequentially:
+
+```python
+for task in tasks:
+    trainer = create_trainer(task)
+    trainer.train()
+    
+    del trainer
+    torch.cuda.empty_cache()
+```
+
+---
+
+# ⚙️ Stability Fixes (Next Layer)
+
+## Reduce gradient explosions
+
+```yaml
+learning_rate: 2e-5   # if higher now, reduce
+```
+
+```python
+torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+```
+
+---
+
+## AMP tuning
+
+If overflows persist:
+
+```python
+GradScaler(init_scale=2**10)
+```
+
+---
+
+# 🚀 What is NOW Working (Good News)
+
+From your logs:
+
+### ✅ GPU is ACTIVE
+
+```text
+Using GPU: NVIDIA H100 80GB
+```
+
+### ✅ Training actually runs
+
+* bias → ✅
+* ideology → ✅
+* propaganda → ✅
+
+👉 Your pipeline is **90% correct now**
+
+---
+
+# ❌ Only thing breaking system
+
+👉 **Device inconsistency during model + optimizer creation**
+
+---
+
+# 🎯 Final Diagnosis
+
+| Area                | Status                |
+| ------------------- | --------------------- |
+| GPU usage           | ✅ fixed               |
+| Memory              | ✅ fine                |
+| Dataset             | ✅ good                |
+| Training loop       | ⚠️ mostly good        |
+| **Device handling** | ❌ BROKEN (root cause) |
+
+---
+
+# 🧩 Bottom Line
+
+This is a **classic PyTorch mistake**:
+
+> Optimizer created before model is moved to GPU → mixed device graph → crash
+
+---
+
+# 🚀 If you want next step
+
+I can:
+
+* Audit your `create_trainer_fn` and fix it fully
+* Or redesign your pipeline into a **true multi-task shared encoder (massive speedup + memory savings)**
+
+That would take your system from *working* → *production-grade optimized*.

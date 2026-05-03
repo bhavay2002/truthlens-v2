@@ -1,0 +1,279 @@
+You’re very close to a **production-grade design**, but there’s a subtle gap:
+
+> Your system currently handles **task-level imbalance (scheduler)** and **data-level imbalance (oversampling/SMOTE)**
+> ❗ It still lacks **loss-level balancing**, which is the most critical layer for deep models.
+
+Let’s refine your architecture into something you’d see in a **real industry ML system (Meta/Google-grade)**.
+
+---
+
+# 🧠 Final Imbalance Strategy (3-Layer System)
+
+You should explicitly implement **all three layers together**:
+
+## 1️⃣ Between Tasks (you already have this ✅)
+
+Handled by:
+
+* `TaskScheduler(strategy="weighted")`
+* `task_weights` normalization
+
+✔ Good design
+✔ Already implemented correctly
+
+👉 This controls:
+
+```text
+how often each task is trained
+```
+
+---
+
+## 2️⃣ Within Task — Data-Level (you partially have this ⚠️)
+
+You mentioned:
+
+* Oversampling (default)
+* Undersampling
+* SMOTE
+* Stratified splits
+
+✔ Good, but:
+
+> ❗ In NLP transformers, **oversampling alone is NOT enough**
+
+Why?
+
+* Model still sees repeated samples → overfitting
+* Gradient signal still biased
+
+👉 Keep this layer, but don’t rely on it.
+
+---
+
+## 3️⃣ Within Task — Loss-Level (MISSING 🔥 CRITICAL)
+
+This is what your system needs to be **industry-grade**.
+
+You must add:
+
+* class weights (classification)
+* pos_weight (multilabel)
+* focal loss (extreme imbalance)
+
+👉 This controls:
+
+```text
+how much each sample influences learning
+```
+
+---
+
+# 🚀 FINAL ARCHITECTURE (Corrected)
+
+```text
+TaskScheduler (between tasks)
+        ↓
+DataLoader (balanced sampling)
+        ↓
+Model (shared encoder + heads)
+        ↓
+TaskLossRouter (class-aware loss)
+        ↓
+LossEngine (task weighting)
+        ↓
+Optimizer
+```
+
+---
+
+# 🔧 REQUIRED ADDITIONS (CLEAN IMPLEMENTATION)
+
+---
+
+## 🔹 1. Keep Your Scheduler (Already Good)
+
+```python
+task_scheduler = TaskScheduler(
+    TaskSchedulerConfig(
+        tasks=list(task_types.keys()),
+        task_weights=settings.task_weights,
+        strategy="weighted"
+    )
+)
+```
+
+✔ No change needed
+
+---
+
+## 🔹 2. Keep Oversampling — but constrain it
+
+Add cap to avoid duplication explosion:
+
+```python
+max_multiplier = 3  # prevent overfitting
+```
+
+---
+
+## 🔹 3. ADD Loss-Level Balancing (MOST IMPORTANT)
+
+### Patch your `TaskLossRouter`
+
+---
+
+### ✅ Classification
+
+```python
+labels = dataset["label"]
+counts = np.bincount(labels)
+ratios = counts / counts.sum()
+
+max_ratio = ratios.max()
+
+weights = None
+if max_ratio > 0.7:
+    weights = compute_class_weights(labels, num_classes).to(device)
+
+if max_ratio > 0.9:
+    loss_fn = FocalLoss(weight=weights)
+else:
+    loss_fn = torch.nn.CrossEntropyLoss(weight=weights)
+```
+
+---
+
+### ✅ Multilabel
+
+```python
+labels = dataset["labels"]
+
+pos = labels.sum(axis=0)
+neg = labels.shape[0] - pos
+
+valid_mask = (pos > 0) & (neg > 0)
+
+labels = labels[:, valid_mask]  # 🔥 fix broken emotion labels
+
+pos_weight = neg / (pos + 1e-6)
+
+loss_fn = torch.nn.BCEWithLogitsLoss(
+    pos_weight=torch.tensor(pos_weight).to(device)
+)
+```
+
+---
+
+## 🔥 4. Add Focal Loss (Essential for your dataset)
+
+```python
+class FocalLoss(torch.nn.Module):
+    def __init__(self, gamma=2.0, weight=None):
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+
+    def forward(self, logits, targets):
+        ce = torch.nn.functional.cross_entropy(
+            logits, targets, weight=self.weight, reduction='none'
+        )
+        pt = torch.exp(-ce)
+        return ((1 - pt) ** self.gamma * ce).mean()
+```
+
+---
+
+# 📊 How Each Layer Contributes
+
+| Layer          | Handles           | Impact                |
+| -------------- | ----------------- | --------------------- |
+| Scheduler      | task imbalance    | 🔄 training frequency |
+| Sampling       | dataset imbalance | ⚖️ exposure           |
+| Loss weighting | class imbalance   | 🎯 learning signal    |
+
+👉 **Loss weighting is the most important one**
+
+---
+
+# 🔥 About Your “Inference Signal Balancing”
+
+You said:
+
+> weighted aggregation of analyzers
+
+✔ This is good—but it’s a **different layer**
+
+It affects:
+
+```text
+final prediction weighting
+```
+
+NOT training.
+
+---
+
+## ✅ Best Practice (Industry)
+
+Keep inference weighting separate:
+
+```python
+final_score = (
+    w_bias * bias_score +
+    w_emotion * emotion_score +
+    w_narrative * narrative_score
+)
+```
+
+👉 Do NOT mix this with training weights
+
+---
+
+# ⚠️ Critical Fix You Still Need
+
+From your logs:
+
+```text
+emotion__emotion_0 → classes=1
+```
+
+👉 You MUST drop these columns or you are training garbage heads.
+
+---
+
+# 🚀 Final Result After Full Implementation
+
+### Before:
+
+* Tasks balanced ✔
+* Classes ignored ❌
+* Emotion partially broken ❌
+
+### After:
+
+* Tasks balanced ✔
+* Classes balanced ✔
+* Emotion fixed ✔
+* Gradients meaningful ✔
+
+---
+
+# 🎯 Bottom Line
+
+> ✔ Your architecture idea is correct
+> ❗ But without **loss-level balancing**, it is incomplete
+
+---
+
+# 🚀 If You Want Next Step
+
+I can now:
+
+* Integrate this into your **exact LossEngine (not bypass it)**
+* Patch **task_scheduler + dataloader + trainer together**
+* Optimize for **GPU + AMP + xformers**
+
+Just say:
+
+👉 **"final production patch with LossEngine integration"**

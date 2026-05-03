@@ -1,0 +1,294 @@
+model:
+  encoder:
+    name:
+    tokenizer_name:
+    max_length:
+    cache_dir:
+
+    # memory / speed
+    gradient_checkpointing:
+    flash_attention:
+    torch_compile:
+    compile_mode:
+
+  architecture:
+    type:                     # multitask_transformer
+    shared_encoder:
+    dropout:
+
+    # optimization
+    reduce_intermediate_allocation:
+    layer_norm_eps:
+    hidden_dropout_prob:
+
+  heads:                      # 🔥 REQUIRED for multitask
+    bias:
+      num_labels:
+      loss_weight:
+    ideology:
+      num_labels:
+      loss_weight:
+    propaganda:
+      num_labels:
+      loss_weight:
+    narrative_frame:
+      CO:
+        num_labels:
+      EC:
+        num_labels:
+      HI:
+        num_labels:
+
+  path:
+
+
+# =========================================================
+# TRAINING
+# =========================================================
+
+training:
+  seed:
+  device:
+
+  epochs:
+  batch_size:
+  gradient_accumulation_steps:
+
+  learning_rate:
+  weight_decay:
+  warmup_ratio:
+  scheduler:
+  optimizer:
+
+  # 🔥 stability
+  label_smoothing:
+  max_grad_norm:
+
+  amp:
+    enabled:
+    dtype:
+
+  gradient_clipping:
+
+  # ------------------------------------------------------
+  # DATA PIPELINE BEHAVIOR (IMPORTANT FOR YOUR USE CASE)
+  # ------------------------------------------------------
+
+  data_pipeline:
+    enable_cache:
+    force_rebuild:
+    enable_cleaning:
+    enable_validation:
+    enable_augmentation:
+    enable_profiling:
+    enable_leakage_check:
+    enable_multitask_validation:
+    enable_label_analysis:
+
+  # ------------------------------------------------------
+  # TOKENIZATION / BATCHING
+  # ------------------------------------------------------
+
+  dynamic_padding:
+  group_by_length:
+
+  dataloader:
+    num_workers:
+    persistent_workers:
+    prefetch_factor:
+    pin_memory:
+
+  # ------------------------------------------------------
+  # EXECUTION OPTIMIZATION
+  # ------------------------------------------------------
+
+  torch_compile:
+  compile_mode:
+  fused_attention:
+
+  # ------------------------------------------------------
+  # CHECKPOINTING
+  # ------------------------------------------------------
+
+  checkpoint:
+    save_steps:
+    save_total_limit:
+    async_save:
+    save_optimizer_every:
+
+  resume_from_checkpoint:
+
+  # ------------------------------------------------------
+  # INPUT SCHEMA
+  # ------------------------------------------------------
+
+  text_column:
+  title_column:
+  label_columns:              # 🔥 IMPORTANT (connects to pipeline)
+
+  # ------------------------------------------------------
+  # EARLY STOPPING
+  # ------------------------------------------------------
+
+  early_stopping:
+    enabled:
+    patience:
+    metric:
+
+
+# =========================================================
+# DATA
+# =========================================================
+
+data:
+  train_path:
+  validation_path:
+  test_path:
+
+  raw_dir:
+  interim_dir:
+  processed_dir:
+
+  # 🔥 VERSIONING (for cache stability)
+  dataset_version:
+  shuffle_seed:
+
+  augmentation_multiplier:
+
+
+# =========================================================
+# FEATURES
+# =========================================================
+
+features:
+  engineered_text_column:
+
+  use_text_combination:       # title + text merge
+
+  tfidf:
+    enabled:
+    max_features:
+    top_terms_per_doc:
+
+  embeddings_cache:           # 🔥 ADVANCED SPEEDUP
+    enabled:
+    path:
+
+
+# =========================================================
+# CROSS VALIDATION
+# =========================================================
+
+cross_validation:
+  enabled:
+  splits:
+  metric:
+  stratified:
+
+
+# =========================================================
+# HYPERPARAMETER TUNING
+# =========================================================
+
+hyperparameter_tuning:
+  enabled:
+  trials:
+  direction:
+  metric:
+
+  sampler:                    # optuna/tpe/random
+  pruner:
+
+  search_space:
+    learning_rate:
+      min:
+      max:
+    batch_size:
+    epochs:
+    dropout:
+    weight_decay:
+
+
+# =========================================================
+# EVALUATION
+# =========================================================
+
+evaluation:
+  metrics:
+    classification:
+    multi_label:
+
+  per_task_metrics:           # 🔥 multitask reporting
+    bias:
+    ideology:
+    propaganda:
+    narrative_frame:
+
+  save_predictions:
+  error_analysis:
+
+
+# =========================================================
+# LOGGING
+# =========================================================
+
+logging:
+  log_level:
+  training_log_path:
+  eval_steps:
+
+  use_wandb:
+  project_name:
+  run_name:
+
+
+# =========================================================
+# PATHS
+# =========================================================
+
+paths:
+  models_dir:
+  logs_dir:
+  reports_dir:
+
+  cache_dir:                  # 🔥 critical for pipeline
+
+  tfidf_vectorizer_path:
+
+  evaluation_results_path:
+  confusion_matrix_path:
+  cleaning_report_path:
+
+
+# =========================================================
+# API
+# =========================================================
+
+api:
+  title:
+  description:
+  version:
+
+  text_preview_chars:
+
+  max_batch_size:
+  timeout_seconds:
+
+
+# =========================================================
+# INFERENCE
+# =========================================================
+
+inference:
+  batch_size:
+  device:
+
+  use_half_precision:
+  allow_raw_text_fallback:
+
+  # 🔥 inference optimization
+  use_onnx:
+  use_tensorrt:
+
+  return_probabilities:
+  threshold:

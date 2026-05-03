@@ -1,0 +1,256 @@
+Excellent—this new log shows **you fixed the previous device bug** ✅
+…but now you’ve hit a **different (and very precise) architecture mismatch**.
+
+---
+
+# 🚨 NEW FAILURE (Root Cause)
+
+```text
+ValueError: labels must have shape (batch_size, 20)
+```
+
+📍 Exact trace: 
+
+---
+
+# 🧠 What Actually Happened
+
+Your pipeline did this:
+
+### Step 1 — Data preprocessing
+
+```text
+Dropped 9 single-class multilabel column(s)
+→ kept 11/20 labels
+```
+
+✔ Correct decision
+✔ Prevents useless training
+
+---
+
+### Step 2 — Model creation
+
+```text
+EmotionClassifier initialized | num_emotions=20
+```
+
+❌ Model STILL expects **20 labels**
+
+---
+
+### Step 3 — Training
+
+```text
+labels shape = (batch_size, 11)
+model expects = (batch_size, 20)
+```
+
+💥 Mismatch → crash
+
+---
+
+# 🔥 Root Cause (Architectural)
+
+You have **inconsistent label dimensionality between:**
+
+| Component | Labels              |
+| --------- | ------------------- |
+| Dataset   | 11 (after dropping) |
+| Model     | 20 (hardcoded)      |
+
+👉 That’s why forward() throws:
+
+```python
+raise ValueError("labels must have shape (batch_size, 20)")
+```
+
+---
+
+# ✅ FIX (Non-negotiable)
+
+You MUST **synchronize model output with dataset labels**
+
+---
+
+## 🔧 Option 1 — Dynamic Model Output (BEST)
+
+Update model initialization:
+
+```python
+num_labels = len(active_labels)  # AFTER dropping
+
+model = EmotionClassifier(
+    num_emotions=num_labels
+)
+```
+
+---
+
+## 🔧 Option 2 — Pass active label indices
+
+You already have:
+
+```text
+kept 11/20: ['emotion_2', 'emotion_6', ...]
+```
+
+👉 Use this:
+
+```python
+model = EmotionClassifier(
+    num_emotions=len(active_columns),
+    active_indices=active_columns
+)
+```
+
+---
+
+## 🔧 Option 3 — Fix forward check (quick patch)
+
+Inside:
+
+```python
+emotion_classifier.py
+```
+
+### ❌ current
+
+```python
+if labels.shape[1] != 20:
+    raise ValueError(...)
+```
+
+---
+
+### ✅ fix
+
+```python
+if labels.shape[1] != self.num_emotions:
+    raise ValueError(...)
+```
+
+---
+
+# ⚠️ IMPORTANT (Most People Miss This)
+
+Your dataset factory is doing:
+
+```text
+Dropping columns → dynamic label space
+```
+
+👉 So your model MUST be **dynamic too**
+
+Otherwise:
+
+* mismatch errors
+* incorrect loss computation
+* silent training bugs
+
+---
+
+# 🧠 Why This Only Appears Now
+
+Earlier run:
+
+* narrative failed first → masked this bug
+
+Now:
+
+* narrative fixed ✅
+* emotion runs → exposes shape mismatch ❌
+
+---
+
+# ⚡ Additional Observations (Good + Fixable)
+
+## ✅ GOOD
+
+* GPU working perfectly
+* bias training complete
+* pipeline stable up to emotion
+
+---
+
+## ⚠️ Still Present
+
+### 1. torch.compile warning
+
+```text
+Dynamo is not supported on Python 3.12+
+```
+
+✔ harmless
+👉 ignore
+
+---
+
+### 2. Gradient overflow
+
+```text
+Gradient overflow detected
+```
+
+👉 reduce LR slightly:
+
+```yaml
+learning_rate: 2e-5
+```
+
+---
+
+# 🚀 Clean Design (Recommended)
+
+Instead of patching everywhere:
+
+## Centralize label config
+
+In `create_trainer_fn`:
+
+```python
+active_labels = dataset.get_active_labels()
+
+model = EmotionClassifier(
+    num_emotions=len(active_labels)
+)
+```
+
+---
+
+# 🎯 Final Diagnosis
+
+| Component                 | Status    |
+| ------------------------- | --------- |
+| Device bug                | ✅ FIXED   |
+| Data pipeline             | ✅ correct |
+| Emotion preprocessing     | ✅ correct |
+| **Model-label alignment** | ❌ BROKEN  |
+
+---
+
+# 🧩 Bottom Line
+
+> You removed 9 labels in data, but model still thinks they exist.
+
+👉 That’s the entire failure.
+
+---
+
+# 🚀 After Fix
+
+Once you align labels:
+
+* emotion sanity check → passes ✅
+* full pipeline → completes ✅
+
+---
+
+# 💬 If you want next level
+
+I can:
+
+* Refactor your pipeline to **auto-sync labels ↔ model ↔ loss (production-grade)**
+* Or convert this into a **true multi-task shared encoder system** (massive efficiency gain)
+
+Right now you’re at **~98% correct**—this is the last real blocker.

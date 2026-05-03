@@ -1,0 +1,131 @@
+# ==========================================================
+# TruthLens AI - Unified Data Pipeline Configuration
+# ==========================================================
+#
+# Audit pass v3 (April 2026) — orphan blocks removed:
+#   - dataset.unified_schema (CFG-D2: contracts table is the source
+#     of truth in src/data_processing/data_contracts.py)
+#   - balancing.* (CFG-D5: samplers use WeightedRandomSampler, not
+#     SMOTE/oversample/undersample)
+#   - augmentation.techniques.* (CFG-D4: TASK_OPS is hard-wired in
+#     data_augmentation.py — no per-technique toggles exist)
+#   - profiling.report_dir / output.* / eda.* (CFG-D7, CFG-D8: no
+#     code reads these)
+#
+# Only keys that are actually consumed by Python remain.
+
+project:
+  name: TruthLens AI
+  version: 2.0
+  description: Multi-task NLP pipeline for bias, ideology, propaganda,
+               emotion, narrative roles, and frame detection.
+
+# ==========================================================
+# DATA SOURCES
+# ==========================================================
+
+dataset:
+
+  datasets:
+
+    bias:
+      path: data/raw/bias
+      text_column: text
+      label_column: bias_label
+
+    ideology:
+      path: data/raw/ideology
+      text_column: text
+      label_column: ideology_label
+
+    propaganda:
+      path: data/raw/propaganda
+      text_column: text
+      label_column: propaganda_label
+
+    narrative:
+      path: data/raw/narrative
+      text_column: text
+      hero_entities: hero_entities
+      villain_entities: villain_entities
+      victim_entities: victim_entities
+
+    emotion:
+      path: data/raw/emotion
+      text_column: text
+      emotion_columns_prefix: emotion_
+
+# ==========================================================
+# DATA VALIDATION
+# ==========================================================
+
+validation:
+
+  required_columns:
+    - text
+
+  max_null_ratio: 0.10
+  max_duplicate_ratio: 0.15
+  min_text_length: 20
+  min_word_count: 30
+
+  label_checks:
+    min_class_ratio: 0.10
+    allow_missing_labels: true
+
+# ==========================================================
+# TEXT CLEANING
+#
+# Each key below maps 1:1 to a field on
+# ``DataCleaningConfig`` (see src/data_processing/data_cleaning.py).
+# CFG-D3 (audit v3): normalize_unicode, remove_emojis and
+# expand_contractions are now real fields with vectorized
+# implementations — they were silently ignored before.
+# ==========================================================
+
+cleaning:
+
+  normalize_unicode: true
+  remove_emojis: true
+  expand_contractions: true
+  strip_urls: true
+  strip_html: true
+
+  lowercase: true
+  normalize_whitespace: true
+
+  drop_duplicates: true
+  drop_empty_text: true
+  min_text_len: 3
+  max_text_len: 20000
+
+# ==========================================================
+# DATA AUGMENTATION
+# ==========================================================
+
+augmentation:
+
+  enabled: true
+  multiplier: 1.5
+
+# ==========================================================
+# TRAIN / VALIDATION / TEST SPLIT
+# ==========================================================
+
+split:
+
+  train_ratio: 0.70
+  validation_ratio: 0.15
+  test_ratio: 0.15
+
+  stratified: true
+  random_state: 42
+
+# ==========================================================
+# REPRODUCIBILITY
+# ==========================================================
+
+reproducibility:
+
+  random_seed: 42
+  deterministic: true

@@ -1,0 +1,110 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Environment variables
+.env
+.env.local
+
+# Models (too large for git)
+models/*.bin
+models/*.pt
+models/*.h5
+models/*.pkl
+models/roberta_model/
+
+# Data (too large for git)
+data/raw/*.csv
+data/processed/*.csv
+data/interim/*.csv
+
+# Logs
+logs/
+*.log
+
+# PyTorch
+*.pth
+*.ckpt
+
+# Transformers cache
+.cache/
+transformers_cache/
+
+# Experiments
+experiments/*
+!experiments/.gitkeep
+
+# Reports
+reports/*.pdf
+reports/*.html
+
+# System
+Thumbs.db
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+
+data/
+*.csv
+*.json
+*.parquet
+*.npy
+*.pkl
+*.pt
+*.pth
+
+data/
+datasets/
+*.csv
+*.json
+*.parquet
+*.npy
+*.pkl
+*.pt
+*.pth

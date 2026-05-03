@@ -1,0 +1,510 @@
+ have full picture of all 12 aggregation files plus the 4 call sites in inference_pipeline.py, analyze_article.py, report_generator.py, and truthlens_pipeline.py. Below is the strict-format audit.
+________________________________________
+🔥 TruthLens Aggregation-Layer Audit
+________________________________________
+🔴 1. CRITICAL AGGREGATION BUGS
+________________________________________
+CRIT-1 — AggregationPipeline.run() signature does not match 3 of 4 call sites → runtime crash
+•	File / function: src/aggregation/aggregation_pipeline.py:73-78 defines run(model_outputs, *, text=None).
+•	Callers that violate the contract:
+Caller	Call	Problem
+src/inference/analyze_article.py:192	run(profile, text=text, analysis_modules=analysis_modules)	analysis_modules is not a parameter → TypeError: unexpected keyword argument
+src/inference/inference_pipeline.py:247	self.aggregation_pipeline.build_profile_from_prediction(prediction)	method does not exist on AggregationPipeline → AttributeError
+src/inference/report_generator.py:109	self.aggregation_pipeline.run(profile, text=text)	the profile shape does not match what FeatureMapper expects (see CRIT-2). Runs but produces empty scores.
+•	Why fusion is incorrect: every entry point except truthlens_pipeline.py:149 and the unit tests is broken. The "main" analyze_article path would crash on the first article.
+•	Exact fix:
+# aggregation_pipeline.py
+def run(
+    self,
+    model_outputs: Dict[str, Any],
+    *,
+    text: Optional[str] = None,
+    analysis_modules: Optional[Dict[str, Any]] = None,
+    profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    ...
+    if profile is not None and not model_outputs:
+        mapped_profile = self._adapt_profile(profile)   # convert builder profile → section dict
+    else:
+        mapped_profile = self.mapper.map_from_model_outputs(model_outputs)
+    ...
+    if analysis_modules:
+        result["analysis_modules"].update(analysis_modules)
+And add a single missing helper:
+def build_profile_from_prediction(self, prediction: Dict[str, Any]) -> Dict[str, Any]:
+    return self.mapper.map_from_model_outputs(prediction)
+________________________________________
+CRIT-2 — FeatureMapper.map_from_model_outputs silently drops the entire input when given a BiasProfile
+•	File / function: src/aggregation/feature_mapper.py:146-192 (map_from_model_outputs).
+•	Issue: the function expects model_outputs[task] to be a dict containing keys "probabilities" or "logits". The actual caller (analyze_article._run_prediction → analyze) passes BiasProfileBuilder.build_profile() output, which has shape:
+{"metadata": {...},
+ "bias":     {feature_name: float, ...},   # no "probabilities" key
+ "emotion":  {feature_name: float, ...},
+ "narrative":{...}, "discourse":{...}, "argument":{...}, "ideology":{...},
+ "metrics": {...}, "bias_score": float}
+•	Why fusion is incorrect: every outputs.get("probabilities") is None and every outputs.get("logits") is None, so the per-task branch is skipped, flat = {}, map_features({}) returns {} → all section_scores empty → all composite scores = 0.
+•	Exact fix:
+def map_from_model_outputs(self, model_outputs):
+    flat = {}
+    for task, outputs in model_outputs.items():
+        if not isinstance(outputs, dict):
+            continue
+        # Branch A: model output (logits/probabilities)
+        if "probabilities" in outputs or "logits" in outputs:
+            ... existing logic ...
+            continue
+        # Branch B: pre-built profile section (already 0-1 features)
+        for feat_name, val in outputs.items():
+            if isinstance(val, (int, float)) and np.isfinite(val):
+                flat[f"{task}_{feat_name}"] = float(val)
+    return self.map_features(flat)
+And register the actual section names in DEFAULT_FEATURE_MAP (currently missing discourse, argument).
+________________________________________
+CRIT-3 — TruthLensScoreCalculator._credibility and _manipulation look up section names that never exist
+•	File / function: src/aggregation/truthlens_score_calculator.py:183-199.
+•	Issue:
+o	_manipulation reads s.get("analysis", 0.0) — FeatureMapper never produces a key "analysis"; BiasProfileBuilder never produces it either.
+o	_credibility reads s.get("discourse", 0.0) and s.get("analysis", 0.0) — FeatureMapper.DEFAULT_FEATURE_MAP has no "discourse" key.
+•	Why fusion is incorrect: manipulation_risk = 0.4*bias + 0.3*emotion + 0.2*narrative + 0.1*0 = …. credibility_score = (0.55*0 + 0.35*graph + 0.1*0) * (1 - penalty) ≈ 0.35*graph. Both always understate by the missing terms; credibility is structurally near-zero because graph values are themselves 0 (CRIT-4).
+•	Exact fix: drive section names from a single registered enum and validate at init:
+REQUIRED_SECTIONS = {"bias", "emotion", "narrative", "discourse",
+                     "graph", "ideology", "analysis"}
+missing = REQUIRED_SECTIONS - set(s.keys())
+if missing:
+    logger.warning("[Calculator] missing sections: %s", missing)
+Then add "discourse" and "analysis" to feature_mapper.DEFAULT_FEATURE_MAP and ensure analyzer outputs are wired.
+________________________________________
+CRIT-4 — Graph cross-signal hardcoded to a key that is never produced
+•	File / function: src/aggregation/truthlens_score_calculator.py:91-100.
+•	Issue: graph_signal = float(profile.get("graph", {}).get("graph_centrality_mean", 0.0)). The FeatureMapper.DEFAULT_FEATURE_MAP["graph"] only emits key "consistency". The graph pipeline (src/graph/graph_analysis.py) produces keys like "graph_density", "avg_centrality", "num_components" — never "graph_centrality_mean".
+•	Why fusion is incorrect: graph_signal == 0.0 for every article. The line val = base_val + 0.1 * graph_signal is dead; the section_debug entries report 0 for every sample.
+•	Exact fix:
+graph_section = profile.get("graph", {})
+graph_signal = float(np.mean([
+    graph_section.get(k, 0.0)
+    for k in ("centrality_mean", "graph_density", "avg_centrality")
+    if isinstance(graph_section.get(k), (int, float))
+] or [0.0]))
+Or — better — accept the graph signal as an explicit pipeline parameter, not by key-string lookup.
+________________________________________
+CRIT-5 — _normalize_profile performs per-section min-max fit on N tiny values, collapsing 1-feature sections to 0
+•	File / function: src/aggregation/aggregation_pipeline.py:254-276 and src/aggregation/score_normalizer.py:74-77, 108-117.
+•	Issue: for each section, ScoreNormalizer.fit_transform(values) fits min/max on only that section's own values from one article (often 1-3 floats).
+o	Section with 1 feature: min == max, denom = max(0.0, EPS) = EPS → (arr - min)/EPS → giant or zero, then clipped → result [1.0] if arr != min, but since arr == min == max, result is [(0)/EPS] = [0.0]. Single-feature sections become 0.
+o	Section with 2 features: smaller value always becomes 0.0, larger always becomes 1.0 → input magnitudes are completely destroyed.
+•	Why fusion is incorrect: bias=0.05 and bias=0.95 profiles produce identical normalized vectors [0, 1] → identical aggregate scores. The whole signal is erased.
+•	Exact fix: there are two correct options; choose one:
+i.	Drop the per-section normalize entirely — FeatureMapper.map_from_model_outputs already clips to [0,1] (line 131) and _normalize already max-norms per section (line 244-249). The ScoreNormalizer step is redundant and harmful.
+ii.	Move normalization to a fitted-once scaler (loaded from disk) so min/max are population-level, not single-article:
+# Offline (one-time) — fit on training-set section vectors
+self.normalizer.load_state_dict(json.load(open("normalizer_state.json")))
+# Online — only transform, never refit
+________________________________________
+CRIT-6 — Calibrators are applied to already-normalized [0,1] feature values, not logits
+•	File / function: src/aggregation/aggregation_pipeline.py:283-311 (_calibrate_profile) ↔ src/aggregation/calibration.py:96-141 (TemperatureScaler, IsotonicCalibrator).
+•	Issue: TemperatureScaler.transform does softmax(arr / T) — assumes input is logits over classes. The pipeline passes profile[section] values that are already in [0,1]. Softmaxing 5 values in [0,1] yields a near-uniform distribution that has nothing to do with model uncertainty.
+•	Why fusion is incorrect: the moment a calibrator is fitted (offline), the section feature vector is converted into a softmax-normalized distribution → all features within a section sum to 1, destroying their absolute magnitudes.
+•	Exact fix: calibration belongs at the logit boundary, not the feature-aggregation boundary. Move it to FeatureMapper.map_from_model_outputs where logits are still available:
+if logits is not None:
+    probs = self.calibrator.transform(np.asarray(logits).reshape(1, -1)).ravel()
+And delete _calibrate_profile entirely from the aggregation pipeline.
+________________________________________
+CRIT-7 — WeightManager adaptive scaling double-applies confidence and entropy
+•	Files / functions:
+o	src/aggregation/weight_manager.py:160-170 — multiplies weights by confidence and (1 - entropy).
+o	src/aggregation/truthlens_score_calculator.py:108-123 — multiplies the section value by the same confidence and the same (1 - α·entropy).
+•	Issue: the same uncertainty/confidence signal is applied twice — once on the weight, once on the value. Section contribution becomes w·conf·(1-α·H)·val·conf·(1-H) instead of w·val modulated once.
+•	Why fusion is incorrect: sections with confidence=0.5, entropy=0.5 have their contribution attenuated by (0.5)·(0.5)·(0.5)·(0.9) ≈ 0.11 instead of 0.5·0.5 = 0.25. Highly uncertain sections are over-penalized; ranking between sections becomes nonlinear.
+•	Exact fix: apply the modulation exactly once in WeightManager, and have the calculator consume the adapted weight as-is:
+# truthlens_score_calculator.compute_scores
+for section, data in profile.items():
+    val = self._aggregate(data) + 0.1 * graph_signal
+    # Do NOT multiply val by confidence or entropy here — already in w
+    section_scores[section] = float(np.clip(val, 0.0, 1.0))
+________________________________________
+CRIT-8 — WeightManager adaptive scaling silently misses keys not present in confidence/entropy
+•	File / function: src/aggregation/weight_manager.py:155-182.
+•	Issue: WeightManager.weights keys: bias, emotion, narrative, analysis_influence_manipulation, discourse, graph, analysis_influence_credibility, credibility_bias_penalty, final_credibility, final_manipulation, final_ideology. The confidence/entropy dicts are keyed by task name (bias, ideology, propaganda, narrative, narrative_frame, emotion).
+o	Matched: bias, emotion, narrative (3 keys).
+o	Unmatched: 8 keys including discourse, graph, ideology, the three final_*, and the two analysis_influence_*.
+•	Why fusion is incorrect: modulation is applied non-uniformly within a group — bias weight gets scaled by confidence, emotion/narrative likewise, but analysis_influence_manipulation does not. After per-group renorm, the non-modulated key absorbs all the missing scale and dominates the group.
+•	Exact fix: propagate confidence at group granularity:
+group_confs = {
+    "manipulation": np.mean([confidence.get(t, 1.0) for t in ("bias","emotion","narrative")]),
+    "credibility":  np.mean([confidence.get(t, 1.0) for t in ("discourse","graph")]),
+}
+for grp, keys in WEIGHT_GROUPS.items():
+    for k in keys:
+        weights[k] *= group_confs.get(grp, 1.0)
+Or maintain an explicit KEY_TO_TASK map and only modulate keys whose task is known.
+________________________________________
+CRIT-9 — Aggregation pipeline never loads weights from YAML config
+•	File / function: src/aggregation/aggregation_pipeline.py:52-54 instantiates WeightManager(smoothing=self.config.weights.smoothing) — no weights= passed. The WeightConfig.weights: Dict[str, float] (aggregation_config.py:75) is never read.
+•	Why fusion is incorrect: the weights: block in config/config.yaml (task_weights: {bias: 1.0, ideology: 1.0, …}) is silently ignored; users editing the YAML get no behavior change.
+•	Exact fix:
+self.weight_manager = WeightManager(
+    weights=self.config.weights.weights or None,
+    version=self.config.weights.version,
+    frozen=not self.config.weights.allow_dynamic_adjustment,
+    smoothing=self.config.weights.smoothing,
+)
+________________________________________
+CRIT-10 — Smoothing operates on a mix of normalized and unnormalized weights
+•	File / function: src/aggregation/weight_manager.py:184-199.
+•	Issue: order of operations is:
+i.	scale weights[k] *= scale (now unnormalized).
+ii.	smooth weights[k] = (1-α)·self.weights[k] + α·weights[k] — self.weights[k] is the already-renormalized base (sums to 1 within group), weights[k] is the unnormalized scaled version (does not sum to 1).
+iii.	renormalize per group.
+•	Why fusion is incorrect: mixing normalized and unnormalized inputs in the convex combination → the smoothing factor α no longer means "10 % toward adaptive". It means "10 % toward an arbitrary-magnitude vector", and the renorm afterward erases the smoothing effect non-linearly.
+•	Exact fix: renormalize before smoothing:
+# 1. scale  →  weights = base * scale
+# 2. renorm scaled
+for grp in WEIGHT_GROUPS.values():
+    total = sum(weights[k] for k in grp) + EPS
+    for k in grp: weights[k] /= total
+# 3. smooth (now both inputs sum to 1)
+for k in weights:
+    weights[k] = (1 - self.smoothing) * self.weights[k] + self.smoothing * weights[k]
+# 4. final renorm (corrects rounding)
+________________________________________
+CRIT-11 — aggregation_metrics.compute_basic_stats raises TypeError on first call
+•	File / function: src/aggregation/aggregation_metrics.py:44-45.
+•	Issue: stray comma:
+"median": float(np.median(values),
+),
+float(np.median(values), ) → float(<scalar>, <missing arg>) is a 2-arg float() call, but with a trailing comma the second arg is omitted, so Python parses this as float((np.median(values),)) → float(tuple) → TypeError.
+•	Why fusion is incorrect: any code path that invokes compute_basic_stats (which compute_batch_metrics does for every key) hard-crashes.
+•	Exact fix:
+"median": float(np.median(values)),
+________________________________________
+CRIT-12 — Multilabel entropy normalized as a Categorical → wrong magnitude
+•	File / function: src/aggregation/aggregation_pipeline.py:317-351 (_compute_entropy) and src/aggregation/feature_mapper.py:166-182.
+•	Issue: both functions do probs / sum(probs) then -Σ p·log p with max_ent = log(N). For multilabel sigmoid outputs (emotion, narrative, narrative_frame per config.yaml), each p_k is an independent Bernoulli — they should not be renormalized to sum to 1, and the maximum entropy is N · log(2), not log(N).
+•	Why fusion is incorrect: an emotion vector [0.9, 0.9, 0.9, …] (all labels active, low uncertainty) is renormalized into a uniform Categorical → entropy = log(N) = max → reported as maximally uncertain when it is in fact maximally confident. The downstream (1 - entropy) modulation then suppresses high-confidence multilabel sections.
+•	Exact fix:
+task_type = TASK_TYPES[task]   # from config
+if task_type == "multilabel":
+    p = np.clip(probs_arr, EPS, 1.0 - EPS)
+    h = -np.sum(p*np.log(p) + (1-p)*np.log(1-p))
+    ent_val = h / (p.size * np.log(2))
+else:
+    probs_arr = probs_arr / probs_arr.sum()
+    h = -np.sum(probs_arr * np.log(probs_arr + EPS))
+    ent_val = h / np.log(max(probs_arr.size, 2))
+entropy[task] = float(np.clip(ent_val, 0.0, 1.0))
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+________________________________________
+PERF-1 — Per-section, per-article Python loops in _normalize_profile, _compute_entropy, compute_scores
+•	Location: aggregation_pipeline.py:254-276, :317-351, truthlens_score_calculator.py:95-133.
+•	Issue: for each article, Python loops over 5-7 sections, each with another inner loop. For a 10k-article batch, this is 50k-70k Python loop iterations executed in run_batch (aggregation_pipeline.py:420-421 is just [self.run(x) for x in batch]).
+•	Fix: vectorize at the batch boundary:
+def run_batch(self, batch_outputs):
+    # 1) Stack probabilities into tensors of shape [B, num_classes_per_task]
+    task_probs = {t: np.stack([self._task_probs(o, t) for o in batch_outputs])
+                  for t in self.tasks}
+    # 2) Vectorized entropy: -Σ p log p, shape [B]
+    entropy = {t: -np.sum(p*np.log(p+EPS), axis=1)/np.log(p.shape[1])
+               for t,p in task_probs.items()}
+    # 3) Vectorized weight expansion + dot product for composite scores
+    ...
+•	Expected speedup: 10-30× on batches ≥ 64.
+________________________________________
+PERF-2 — ScoreExplainer._integrated_gradients builds the alpha tensor with a Python list comprehension
+•	Location: score_explainer.py:79-84.
+•	Issue: scaled = [baseline + (i / self.steps) * (embeddings - baseline) for i in range(self.steps)] then torch.cat(...) — 32 separate sub-graphs, 32 small allocations, then a concat. On GPU this serializes 32 kernel launches.
+•	Fix:
+alphas = torch.linspace(0, 1, self.steps, device=embeddings.device).view(-1, 1, 1, 1)
+scaled = baseline.unsqueeze(0) + alphas * (embeddings - baseline).unsqueeze(0)
+scaled = scaled.flatten(0, 1).requires_grad_(True)
+•	Expected speedup: 3-5× on the IG path (which already runs per-task).
+________________________________________
+PERF-3 — Repeated dict→list→np.array conversions inside hot path
+•	Location: truthlens_score_calculator._aggregate (lines 168-172) is called per-section per-article. Each call: list comp + isinstance check + np.array + np.mean.
+•	Issue: for batch run, this happens N_articles × N_sections times. The numpy overhead of building 3-element arrays is dominated by the array constructor.
+•	Fix: for small sections, use Python sum/len:
+vals = [v for v in section_data.values()
+        if isinstance(v,(int,float)) and math.isfinite(v)]
+return min(max(sum(vals)/len(vals), 0.0), 1.0) if vals else 0.0
+•	Expected speedup: ~5-10× on the calculator's inner loop.
+________________________________________
+PERF-4 — assess_truthlens_risks calls assess_risk_levels once per key (3 calls per article)
+•	Location: risk_assessment.py:178-208.
+•	Issue: triple invocation of assess_risk_levels for what is conceptually one batch of 3 scalars. Each call rebuilds RiskConfig(...) validation logic.
+•	Fix: call once with all three keys in scores:
+result = assess_risk_levels(
+    {k_in: scores[k_in] for k_in in TRUTHLENS_RISK_KEY_MAP if k_in in scores},
+    probabilities=probabilities, config=config, return_scores=True,
+)
+return {k_out: {"level": result["levels"][k_in], "score": result["scores"][k_in]}
+        for k_in, k_out in TRUTHLENS_RISK_KEY_MAP.items() if k_in in scores}
+•	Expected speedup: ~3× on this hot path.
+________________________________________
+PERF-5 — run_batch is plain [run(x) for x in batch], no parallelism, no shared state reuse
+•	Location: aggregation_pipeline.py:420-421.
+•	Issue: the mapper, normalizer, weight_manager, calculator are all stateless w.r.t. articles, but each article re-runs the full Python control flow (12 numbered phases per article). No batching benefits.
+•	Fix: add a vectorized run_batch that does the per-phase batched computations described in PERF-1 and only does per-article work for the small risk + validator step.
+•	Expected speedup: 5-10× end-to-end on batches ≥ 32.
+________________________________________
+🟡 3. SCALE / NORMALIZATION ISSUES
+________________________________________
+NORM-1 — Triple normalization of the same values (clip → max-norm → minmax-fit-transform)
+•	Files: feature_mapper.py:131 (clip), feature_mapper.py:235-251 (_normalize, max-norm), aggregation_pipeline.py:254-276 (_normalize_profile, fit_transform).
+•	Issue: values pass through three different scaling stages. Each is sound in isolation; cascaded they destroy magnitude information (CRIT-5).
+•	Fix: keep only one normalization step. Recommended: drop _normalize (the per-section max-norm in mapper) and the _normalize_profile step; rely on the population-level fitted ScoreNormalizer loaded from disk.
+________________________________________
+NORM-2 — _normalize_probs adds EPS to denominator but values may be zero — produces small but non-zero "probabilities"
+•	File: feature_mapper.py:67-69.
+•	Issue: when arr.sum() == 0, division yields 0/EPS = 0. OK. But when arr is a single non-zero value, arr/sum(arr) = 1.0 → reported as 100 % confidence even for a single-class model with only one logit. This is propagated as f"{task}_confidence" = 1.0.
+•	Fix: explicit guard:
+total = arr.sum()
+if total <= EPS or arr.size < 2:
+    return arr.copy()       # cannot normalize, leave as-is
+return arr / total
+________________________________________
+NORM-3 — feature_range config option is a no-op when clip=True
+•	File: score_normalizer.py:115-117, 136-137.
+•	Issue: code applies feature_range (a, b), then _clip01 clips to [0, 1] if clip=True. If user configured feature_range=(-1, 1), the clip01 silently truncates the negative half.
+•	Fix:
+if self.clip:
+    result = np.clip(result, self.feature_range[0], self.feature_range[1])
+________________________________________
+NORM-4 — Mixing logit-derived "max-prob" with feature-derived [0,1] values in the same section dict
+•	File: feature_mapper.py:180-190.
+•	Issue: flat[f"{task}_probability"] is max(softmax(logits)) (a "winning class" probability), flat[f"{task}_confidence"] is the same value, flat[f"{task}_entropy"] is normalized entropy. These are then routed through the same mapping path as handcrafted feature scores (e.g. bias_probability is registered alongside bias_score in DEFAULT_FEATURE_MAP), and averaged together by _aggregate. The "probability" and "entropy" live on different semantic axes — averaging them is a category error.
+•	Fix: keep model-derived signals (probability, confidence, entropy) separate from handcrafted features:
+return {
+    "model_signals": {f"{task}_{k}": v for ...},
+    "feature_signals": {...},
+}
+Aggregator must combine them via a known formula, not arithmetic mean.
+________________________________________
+⚖️ 4. WEIGHTING ISSUES
+________________________________________
+WGT-1 — credibility_bias_penalty=0.20 is outside any normalization group
+•	File: weight_manager.py:38-42 (WEIGHT_GROUPS) and truthlens_score_calculator.py:198.
+•	Issue: _normalize_group only normalizes the three groups; credibility_bias_penalty is never normalized. Used as a raw multiplier in _credibility. If a user sets credibility_bias_penalty=2.0 in config, penalty = clip(2.0 * bias_score, 0, 1) — the clip masks the bug but the user's "weight" no longer means a relative weight, just a saturation knob.
+•	Fix: treat as a separate scalar (not a "weight"), validate to [0,1], and document:
+if "credibility_bias_penalty" in self.weights:
+    self.weights["credibility_bias_penalty"] = float(np.clip(
+        self.weights["credibility_bias_penalty"], 0.0, 1.0))
+________________________________________
+WGT-2 — Hardcoded fusion constants throughout TruthLensScoreCalculator
+•	File: truthlens_score_calculator.py:100, 128.
+•	Issue:
+o	val = base_val + 0.1 * graph_signal — graph influence cap hardcoded at 0.1.
+o	val = 0.5 * val + 0.5 * exp_score — explanation blend hardcoded at 0.5.
+•	Fix: add to AggregationConfig:
+class FusionConfig(BaseModel):
+    graph_influence_cap: float = 0.1
+    explanation_blend:   float = 0.5
+And read them in compute_scores.
+________________________________________
+WGT-3 — Default weights in weight_manager.DEFAULT_WEIGHTS and ScoreWeights dataclass are duplicated and divergent-prone
+•	Files: weight_manager.py:20-35 ↔ truthlens_score_calculator.py:17-31.
+•	Issue: two separate sources of truth. If one is updated and the other isn't, weights silently disagree (calculator falls back to its own defaults when WeightManager hasn't sent them).
+•	Fix: delete ScoreWeights and have the calculator always require an explicit weights argument; pipeline passes weight_manager.get_weights() even when no adaptive scaling is requested.
+________________________________________
+WGT-4 — Adaptive-weight scale clip is asymmetric
+•	File: weight_manager.py:180.
+•	Issue: scale = np.clip(scale, 0.1, 2.0). A signal can boost a weight by 2× but only attenuate by 10×. Asymmetric in log-space → systematic bias toward high-confidence sections.
+•	Fix: symmetric clip:
+scale = np.clip(scale, 0.5, 2.0)   # ±1 octave
+And document the rationale, or expose as config.
+________________________________________
+WGT-5 — _validate_weights rejects negatives but accepts zero, which then crashes _normalize_group
+•	File: weight_manager.py:107-115, 121-130.
+•	Issue: if a group's weights are all zero (allowed by validation), _normalize_group raises ValueError("Invalid group: …"). The validator should reject this earlier with a clearer message.
+•	Fix:
+for grp, keys in WEIGHT_GROUPS.items():
+    if sum(weights[k] for k in keys if k in weights) <= 0:
+        raise ValueError(f"Group {grp} sums to zero")
+________________________________________
+🧩 5. TOKEN ALIGNMENT ISSUES
+________________________________________
+TOK-1 — ScoreExplainer._section_scores uses naive substring match → wrong attribution
+•	File: score_explainer.py:113-125.
+•	Issue: if any(k in clean for k in keys) — keyword "story" matches token "history", "joy" matches "enjoyed", "fear" matches "fearless", "opinion" matches "opinionated". All importance gets credited to the wrong section.
+•	Fix: exact match, or whole-word match after token normalization:
+clean = clean.strip().lstrip("ġ").lstrip("Ġ").replace("##", "")
+if clean in keys:   # exact
+    section_scores[section] += float(score)
+Better: replace keyword-matching with the trained classifier's per-token attribution (which already exists in _integrated_gradients).
+________________________________________
+TOK-2 — _section_scores assumes WordPiece (##) but model is RoBERTa BPE (Ġ)
+•	File: score_explainer.py:119.
+•	Issue: clean = token.lower().replace("##", "") — never strips Ġ (RoBERTa word-initial marker). For tokens like Ġemotion the substring match accidentally still works ("emotion" in "ġemotion"), but for tokens like ĠJoy lowercased to ġjoy, substring match "joy" in "ġjoy" works — but other matches fail (e.g. "however" does not match "Ġhow" + "ever" split).
+•	Fix: detect the tokenizer family from the model:
+if hasattr(self.tokenizer, "convert_tokens_to_string"):
+    clean = self.tokenizer.convert_tokens_to_string([token]).strip().lower()
+________________________________________
+TOK-3 — Subword tokens get full-section credit, never down-weighted
+•	File: score_explainer.py:117-123.
+•	Issue: if a single word is split into 5 subwords and each subword matches a section keyword, the section receives 5 × per_subword_importance instead of 1 × word_importance. Long compound words systematically dominate attribution.
+•	Fix: group subwords by word boundary first (using Ġ/## marker), then sum importance per word, then apply keyword match.
+________________________________________
+TOK-4 — IG attention_mask.repeat(self.steps, 1) does not handle padding consistently
+•	File: score_explainer.py:86-87.
+•	Issue: attention_mask is repeated, but the IG result importance.sum(dim=-1) then squeeze includes padding positions. Padding tokens get IG attribution that propagates into _section_scores (their tokens are usually <pad> which doesn't match any keyword, so it's silently zeroed — but the magnitude is included in normalization).
+•	Fix:
+importance = importance * attention_mask[0].cpu().numpy()
+________________________________________
+🚀 6. GPU / VECTORISATION ISSUES
+________________________________________
+GPU-1 — ScoreExplainer.explain_profile runs entirely on CPU even though self.device is set
+•	File: score_explainer.py:193-219.
+•	Issue: the profile-mode path (the one actually used by AggregationPipeline.run) is pure-Python list-iteration. It never touches the GPU. The _integrated_gradients path is GPU-enabled but only triggered by explain_from_prediction, which is not called by AggregationPipeline. Configured method is "integrated_gradients" but the pipeline always falls back to the keyword-sum heuristic.
+•	Fix: wire the IG path:
+if self.config.attribution.method == "integrated_gradients" and self.model is not None:
+    explanations_raw = self.explainer.explain_from_prediction(text, model_outputs)
+else:
+    explanations_raw = self.explainer.explain_profile(calibrated)
+________________________________________
+GPU-2 — IG forward pass uses requires_grad_(True) but never re-zeros scaled.grad
+•	File: score_explainer.py:84, 98, 101.
+•	Issue: self.model.zero_grad() is called, but scaled.grad is the leaf tensor — its .grad is not cleared by model.zero_grad(). On second call, scaled.grad += new_grad accumulates → IG is biased.
+•	Fix:
+if scaled.grad is not None:
+    scaled.grad.zero_()
+________________________________________
+GPU-3 — _compute_entropy allocates a fresh numpy array per task per article
+•	File: aggregation_pipeline.py:331-349.
+•	Issue: for batched inference (run_batch), this is N_articles × N_tasks numpy allocations, all small and short-lived → high GC pressure.
+•	Fix: vectorize across batch (PERF-1). For non-batched, use scalar ops:
+probs_arr = np.asarray(probs, dtype=np.float64)
+if not np.isfinite(probs_arr).all():
+    probs_arr = np.nan_to_num(probs_arr, nan=0.0, posinf=1.0, neginf=0.0)
+________________________________________
+GPU-4 — score_normalizer._to_output always copies Numpy → Tensor, loses dtype
+•	File: score_normalizer.py:31-34.
+•	Issue: torch.from_numpy(arr).to(like.device) returns float32 even if like is float16 (e.g. AMP context). Subsequent ops then mix dtypes → autocast warnings or implicit casts.
+•	Fix:
+return torch.from_numpy(arr.astype(np.float32)).to(device=like.device, dtype=like.dtype)
+________________________________________
+🔄 7. RECOMPUTATION ISSUES
+________________________________________
+REC-1 — Confidence and entropy computed three times per call
+•	Files:
+o	feature_mapper.map_from_model_outputs:177-182 — computes confidence = max(probs) and entropy per task.
+o	feature_mapper.extract_confidence:198-229 — recomputes confidence = max(probs) per task.
+o	aggregation_pipeline._compute_entropy:317-351 — recomputes entropy per task.
+•	Issue: the same probability arrays go through np.asarray + nan_to_num + clip + max/entropy three times.
+•	Fix: compute once at the mapper boundary and return all three signals in a single dataclass:
+@dataclass
+class TaskSignal:
+    probability: np.ndarray
+    confidence: float
+    entropy: float
+    max_class: int
+All downstream consumers read from the cached TaskSignal.
+________________________________________
+REC-2 — _normalize_profile re-fits the normalizer on every call
+•	File: aggregation_pipeline.py:269-272.
+•	Issue: self.normalizer.fit_transform(values) mutates self.normalizer.stats per-section per-article. The normalizer's "fit state" is overwritten each time → stateful flag fitted=True is meaningless because the stats are always from the last seen section.
+•	Fix: either (a) load the normalizer state from disk once at init and call only transform(), or (b) use a stateless function for per-section normalization and stop pretending the normalizer has a meaningful fit lifecycle.
+________________________________________
+REC-3 — risk_assessment.assess_truthlens_risks builds RiskConfig(invert_keys=[...]) every call
+•	File: risk_assessment.py:185-187.
+•	Issue: new RiskConfig allocated per article. Negligible but symptomatic.
+•	Fix: module-level constant:
+_DEFAULT_TRUTHLENS_CONFIG = RiskConfig(invert_keys=["truthlens_credibility_score"])
+config = config or _DEFAULT_TRUTHLENS_CONFIG
+________________________________________
+REC-4 — score_explainer.explain_profile enumerates set(sec for sec, _, _ in contributions) after already sorting
+•	File: score_explainer.py:215-218.
+•	Issue: the section_scores dict comp does an inner for sec, _, v in contributions if sec == s per section — O(N·S) instead of O(N) with a single pass.
+•	Fix:
+section_scores = {}
+for sec, _, v in contributions:
+    section_scores[sec] = section_scores.get(sec, 0.0) + v
+________________________________________
+🧹 8. UNUSED AGGREGATION CODE
+________________________________________
+Module	Status	Action
+AggregationMetrics (aggregation_metrics.py:264-279)	Never instantiated by pipeline	Wire as self.metrics.update(scores) after step 9, or delete
+compute_distribution_shift / kl_divergence / js_divergence / population_stability_index (aggregation_metrics.py)	Never called from aggregation runtime	Move to src/evaluation/ (where drift belongs) or wire to DriftConfig
+DriftConfig, MonitoringConfig (aggregation_config.py:140-160)	Defined, never read	Either wire into pipeline (if config.drift.enabled: …) or delete
+UncertaintyConfig.track_percentiles, p95_threshold, p99_threshold (aggregation_config.py:54-58)	Defined, never read	Wire into _compute_entropy to emit p95/p99 metrics
+WeightConfig.weights field (aggregation_config.py:75)	Defined, never read	CRIT-9
+WeightConfig.allow_dynamic_adjustment	Defined, never read	Wire to WeightManager(frozen=...)
+WeightManager.load_weights_from_config (weight_manager.py:79-101)	Public method, no caller	Wire from AggregationPipeline.__init__ if config.weights.weights_path is set
+WeightManager.adjust_weight (weight_manager.py:218-230)	Public method, no caller	OK as user-facing API; document or delete
+score_normalizer.normalize_with_uncertainty (score_normalizer.py:165-177)	Defined, never called	Useful — wire into _normalize_profile so entropy modulates normalization
+score_normalizer.log_scale, percentile_clip, sigmoid_calibration (:203-217)	Module-level helpers, no caller	Either expose via config or delete
+risk_assessment.assess_batch (risk_assessment.py:155-164)	Public, no caller	Acceptable for batch API; keep but add to __init__.py (currently empty)
+BaseCalibrator.fit_transform (calibration.py:69-71)	Inherited but no caller	OK as base-class API
+risk_assessment._entropy (:56-58)	Called from assess_risk_levels only when probabilities is passed; pipeline always passes probabilities=None (aggregation_pipeline.py:156)	Either pass real probabilities or delete
+aggregation_pipeline._build_explanation_model (:378-414)	Wired but top_features come from ScoreExplainer.explain_profile which uses keyword-substring matching → tokens are feature names, not real tokens	Replace with IG path (GPU-1)
+aggregation_pipeline.run_batch (:420-421)	Wired but trivial (no batching)	Replace with vectorized version (PERF-5)
+__init__.py (src/aggregation/__init__.py)	Empty	Export the public API for cleaner imports
+________________________________________
+⚙️ 9. CONFIG ISSUES
+________________________________________
+CFG-1 — Hardcoded WEIGHT_GROUPS membership in two files (weight_manager.py:38-42, truthlens_score_calculator.py:38-40)
+•	Fix: single source in aggregation_config.py:
+WEIGHT_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "manipulation": ("bias", "emotion", "narrative", "analysis_influence_manipulation"),
+    "credibility":  ("discourse", "graph", "analysis_influence_credibility"),
+    "final":        ("final_credibility", "final_manipulation", "final_ideology"),
+}
+Both modules import this.
+________________________________________
+CFG-2 — AggregationConfig.weights.weights not actually wired
+•	See CRIT-9.
+________________________________________
+CFG-3 — enable_explanations, enable_risk are top-level booleans but enable_drift, enable_monitoring are nested under DriftConfig.enabled/MonitoringConfig.enabled
+•	File: aggregation_config.py:177-184.
+•	Fix: consistent flat naming:
+enable_explanations: bool = True
+enable_risk: bool = True
+enable_drift: bool = False
+enable_monitoring: bool = False
+________________________________________
+CFG-4 — RiskConfig exists in two places with conflicting shapes
+•	aggregation_config.RiskConfig (Pydantic, has low_threshold, medium_threshold, uncertainty_penalty).
+•	risk_assessment.RiskConfig (plain class, has default, per_key, invert_keys, weights, uncertainty_penalty).
+•	The pipeline imports the second, ignores the first (line 64: self.risk_config = RiskConfig()).
+•	Fix: one schema. The Pydantic version should construct an assess.RiskConfig:
+self.risk_config = AssessRiskConfig(
+    default=RiskThresholds(self.config.risk.low_threshold,
+                           self.config.risk.medium_threshold),
+    uncertainty_penalty=self.config.risk.uncertainty_penalty,
+    invert_keys=["truthlens_credibility_score"],
+)
+________________________________________
+CFG-5 — aggregation_config.config_version="v2" but aggregation_pipeline.model_version="truthlens-v2" — divergent versioning, no schema validation
+•	File: aggregation_pipeline.py:189-190.
+•	Fix: read both from one place (config.versions.{schema, model, aggregation}).
+________________________________________
+CFG-6 — No aggregation: block in config/config.yaml
+•	The AggregationConfig Pydantic model is rich but the YAML never populates it. load_aggregation_config(None) is the de-facto entry point → defaults always.
+•	Fix: add:
+aggregation:
+  weights:
+    weights:
+      bias: 0.40
+      emotion: 0.30
+      narrative: 0.20
+      ...
+    smoothing: 0.1
+  risk:
+    low_threshold: 0.3
+    medium_threshold: 0.6
+And have AggregationPipeline.__init__ accept a config_path: Optional[Path] argument.
+________________________________________
+🧪 10. EDGE CASE FAILURES
+________________________________________
+Edge case	File / line	Failure	Fix
+Empty model_outputs={}	aggregation_pipeline.py:80-86	mapper.map_from_model_outputs({}) → flat={} → all-zero scores, no warning	Log warning + raise in strict mode
+All-NaN probabilities	feature_mapper.py:166-169	nan_to_num silently converts to 0 → entropy = -Σ 0·log 0+EPS = 0 → reported as max confidence	Emit warning when np.isnan(orig).any()
+Single-feature section	aggregation_pipeline._normalize_profile	Section value collapses to 0 (CRIT-5)	CRIT-5 fix
+All-zero section after normalization	truthlens_score_calculator._aggregate returns 0 → (1-0) for ideology in _final → 0.2*1.0 = 0.2 baseline contribution always present	Distinguish "no signal" from "zero signal" via a None sentinel	
+confidence=NaN	weight_manager.get_adaptive_weights:163 np.clip(NaN, 0, 1) → NaN; subsequent weights[k] *= NaN → all NaN	Add np.nan_to_num guard	
+Batch size = 1	_normalize_profile collapses values (CRIT-5)	CRIT-5 fix	
+Empty tokens list	score_explainer._section_scores → returns dict of zeros	OK but silent; warn	
+text=None passed to pipeline	score_explainer.explain_from_prediction would crash; explain_profile ignores text → OK	Document; text arg in pipeline.run is unused — drop or wire	
+WeightManager group with all-zero weights	_normalize_group → ValueError("Invalid group")	WGT-5 fix; produce a clearer error pointing to the offending group	
+...			
+This response is too long to display in full.
+Checkpoint made1 minute ago
+

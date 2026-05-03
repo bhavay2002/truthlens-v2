@@ -1,0 +1,229 @@
+You are a senior ML systems engineer, data engineer, and technical documentation expert.
+
+Your task is to generate a COMPLETE, PRODUCTION-GRADE documentation file named `aggregation.md` for the `src/aggregation` folder of a machine learning repository.
+
+---
+
+## 🎯 Objective
+
+Create a deeply structured and technically precise document that enables any ML engineer or data engineer to:
+
+* Fully understand how data is aggregated and consolidated
+* Trace transformations from granular data → grouped/aggregated datasets
+* Understand grouping logic, windowing strategies, and metrics
+* Identify performance bottlenecks and optimization strategies
+* Safely extend or modify aggregation logic without breaking downstream systems
+
+---
+
+## 📁 Scope
+
+Analyze ALL files inside:
+src/aggregation/
+
+Include:
+
+* Every Python file
+* Subfolders (if any)
+* Utility/helper modules used for aggregation
+
+---
+
+## 📚 Required Output Structure (STRICT)
+
+### 1. Overview
+
+* Purpose of `src/aggregation`
+* Role in ML/data pipeline (data → features/analysis bridge)
+* When aggregation is applied (pre-feature, post-cleaning, etc.)
+
+---
+
+### 2. Folder Architecture
+
+* Tree structure of `src/aggregation`
+* One-line explanation per file/module
+
+Example:
+src/aggregation/
+├── groupby_ops.py        → Core aggregation logic
+├── time_windows.py       → Rolling/window aggregations
+├── metrics.py            → Aggregated metrics definitions
+...
+
+---
+
+### 3. End-to-End Aggregation Flow
+
+* Step-by-step pipeline:
+
+  * Input dataset(s)
+  * Grouping keys used
+  * Aggregation operations applied
+  * Output dataset(s)
+
+* Clearly describe:
+
+  * Execution order
+  * Inter-module dependencies
+  * Pipeline orchestration logic
+
+---
+
+### 4. File-by-File Deep Dive
+
+For EACH file:
+
+#### File: <filename.py>
+
+**Purpose**
+
+* Why this aggregation logic exists (business + system reasoning)
+
+**Key Functions / Classes**
+For each function:
+
+* Function name
+* Input parameters (types + meaning)
+* Output (DataFrame, table, etc.)
+* Step-by-step aggregation logic
+* Edge cases handled (missing groups, nulls, skewed data)
+
+**Aggregation Techniques**
+
+* Types used:
+
+  * GroupBy (single/multi-key)
+  * Rolling / sliding windows
+  * Time-based aggregation (daily, weekly, session-based)
+  * Hierarchical aggregation
+  * Incremental aggregation (if any)
+
+**Dependencies**
+
+* Internal modules
+* External libraries (pandas, numpy, pyspark, etc.)
+
+**Performance Notes**
+
+* Vectorization
+* Chunking / batching
+* Memory footprint
+* Distributed processing (if any)
+
+---
+
+### 5. Aggregation Definitions Table
+
+Create a structured table:
+
+| Aggregated Feature | Source Column(s) | Grouping Key(s) | Aggregation Type | Window | Description |
+| ------------------ | ---------------- | --------------- | ---------------- | ------ | ----------- |
+
+Include ALL aggregation outputs.
+
+---
+
+### 6. Data Contracts
+
+* Input schema (before aggregation)
+* Output schema (after aggregation)
+* Data types, constraints, and expected shapes
+
+---
+
+### 7. Temporal & Windowing Logic
+
+* Time-based grouping strategies
+* Window definitions:
+
+  * Fixed windows
+  * Rolling windows
+  * Expanding windows
+* Handling time zones, gaps, irregular intervals
+
+---
+
+### 8. Config Integration
+
+* Parameters from config files:
+
+  * Window sizes
+  * Grouping keys
+  * Aggregation types
+* Feature flags controlling aggregation behavior
+
+---
+
+### 9. Data Integrity & Validation
+
+* Handling:
+
+  * Missing values
+  * Duplicate records
+  * Outliers during aggregation
+* Validation checks after aggregation
+
+---
+
+### 10. Optimization & Scalability
+
+* Efficient groupby strategies
+* Use of indexing
+* Parallel/distributed execution (Spark/Dask)
+* Avoiding recomputation (caching, incremental updates)
+
+---
+
+### 11. Extensibility Guide
+
+* How to add new aggregation logic
+* How to introduce new grouping keys safely
+* Where to plug additional metrics
+
+---
+
+### 12. Common Pitfalls / Risks
+
+* Data leakage via aggregation
+* Incorrect grouping keys
+* Time leakage in rolling windows
+* High cardinality explosion
+* Performance degradation on large datasets
+
+---
+
+### 13. Example Usage
+
+* Minimal working example:
+
+  * Input data → aggregation → output
+
+---
+
+## ⚠️ Constraints
+
+* DO NOT skip any file
+* DO NOT give vague explanations
+* DO NOT assume undocumented behavior
+* Be precise and implementation-aware
+
+---
+
+## 💡 Style Guidelines
+
+* Clean markdown structure
+* Use tables for aggregation definitions
+* Use code blocks where necessary
+* Keep explanations concise but technically deep
+
+---
+
+## 🚀 Goal
+
+After reading `aggregation.md`, a developer should:
+
+* Understand exactly how data is grouped and summarized
+* Know every aggregation and why it exists
+* Be able to reproduce aggregation logic without reading code
+* Safely extend aggregation without breaking downstream systems

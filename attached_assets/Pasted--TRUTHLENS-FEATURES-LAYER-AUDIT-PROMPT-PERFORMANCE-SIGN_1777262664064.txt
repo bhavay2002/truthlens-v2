@@ -1,0 +1,165 @@
+ TRUTHLENS FEATURES LAYER AUDIT PROMPT (  PERFORMANCE + SIGNAL QUALITY MAX)
+You are a principal ML feature engineering expert, numerical optimization engineer, and high-performance systems auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the src/features/ folder.
+This layer defines:
+ALL engineered signals used by analyzers and models
+If this layer is inefficient or incorrect →
+➡️ Model learns noise OR system becomes too slow to scale
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Every feature must be meaningful, non-redundant, vectorized, cacheable, and aligned with token/model space.
+You must ensure:
+•	No weak / noisy features ❌
+•	No duplicate signals ❌
+•	No per-sample loops ❌
+•	No recomputation ❌
+•	No CPU bottlenecks ❌
+•	No unused features ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/features/* all files
+    
+Also validate integration with:
+•	src/data/ (input text / tokens)
+•	src/analysis/ (feature consumption)
+•	src/config/
+________________________________________
+🔥 AUDIT DIMENSIONS (FEATURE-SPECIFIC)
+________________________________________
+1. 🔗 FEATURE PIPELINE INTEGRITY
+Trace:
+raw text / tokens
+→ preprocessing (if any)
+→ feature functions
+→ feature pipeline
+→ feature context / analyzer usage
+MUST VERIFY:
+•	Every feature is actually used downstream
+•	Output shape consistent across pipeline
+•	No silent feature drop
+CRITICAL:
+•	Feature computed but never consumed
+•	Shape mismatch across features
+________________________________________
+2. 🧠 FEATURE QUALITY (VERY IMPORTANT)
+Detect:
+•	noisy heuristics
+•	constant features
+•	low-variance features
+•	highly correlated duplicates
+MUST:
+•	remove redundant features
+•	justify each feature’s predictive value
+________________________________________
+3. ⚡ PERFORMANCE (TOP PRIORITY)
+FORBIDDEN:
+•	Python loops over tokens ❌
+•	per-sample feature computation ❌
+•	repeated string operations ❌
+MUST VERIFY:
+•	vectorized operations (NumPy / Torch)
+•	batch-level feature computation
+•	precomputation where possible
+________________________________________
+4. 🧩 TOKEN / TEXT ALIGNMENT
+Trace:
+raw text → cleaned text → tokens → features
+MUST VERIFY:
+•	features align with tokenization scheme
+•	no mixing:
+o	word-level features ❌
+o	subword tokens ❌
+CRITICAL BUG:
+•	computing features on raw text but applying to token-level analysis
+________________________________________
+5. 💾 FEATURE CACHING (MANDATORY)
+MUST VERIFY:
+•	heavy features cached
+•	reuse across analyzers
+CRITICAL:
+•	recomputing embeddings / statistics repeatedly
+•	no hashing / cache invalidation
+________________________________________
+6. 🧱 FEATURE REGISTRY (ANTI-DEAD-CODE SYSTEM)
+MUST VERIFY:
+•	all features registered
+•	registry used by pipeline
+DETECT:
+Feature: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+7. 📊 NUMERICAL STABILITY
+Detect:
+•	division by zero
+•	log(0)
+•	exploding values
+•	inconsistent normalization
+MUST FIX:
+•	epsilon stabilization
+•	normalization consistency
+________________________________________
+8. 🚀 GPU / TORCH OPTIMIZATION
+MUST CHECK:
+•	heavy ops use torch tensors (not Python/NumPy)
+•	no .cpu().numpy() inside pipeline ❌
+•	avoid tensor copying
+FLAG:
+•	CPU-only feature computation in GPU pipeline
+•	unnecessary device transfers
+________________________________________
+9. 🔄 RECOMPUTATION ELIMINATION
+MUST VERIFY:
+•	same feature not recomputed multiple times
+•	shared features via pipeline/context
+CRITICAL:
+•	duplicate feature logic across files
+________________________________________
+10. 🧪 MULTI-TASK COMPATIBILITY (YOUR SYSTEM)
+Validate against schema :
+•	binary tasks
+•	multi-class tasks
+•	multi-label tasks
+•	structured outputs (narrative entities)
+MUST VERIFY:
+•	features generalize across tasks
+•	no task-specific hardcoding
+________________________________________
+11. 🧪 EDGE CASE ROBUSTNESS
+Check:
+•	empty text
+•	extremely long text
+•	unicode / multilingual text
+•	special characters
+•	repeated tokens
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL FEATURE BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why it breaks model signal:
+•	Exact fix:
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. FEATURE QUALITY ISSUES
+________________________________________
+🧠 4. REDUNDANT / CORRELATED FEATURES
+________________________________________
+🧩 5. TOKEN ALIGNMENT ISSUES
+________________________________________
+🚀 6. GPU / TORCH ISSUES
+________________________________________
+💾 7. CACHING ISSUES
+________________________________________
+🧹 8. UNUSED FEATURES
+________________________________________
+⚙️ 9. CONFIG ISSUES
+________________...

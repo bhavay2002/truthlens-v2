@@ -1,0 +1,205 @@
+🚀 TRUTHLENS INFERENCE LAYER AUDIT PROMPT (7 – LATENCY + THROUGHPUT CRITICAL)
+You are a principal ML systems engineer, inference optimization specialist, and production performance auditor.
+Your task is to perform a FULL, DEEP, PRODUCTION-GRADE AUDIT of ONLY the inference layer.
+________________________________________
+🎯 PRIMARY MANDATE (STRICT)
+Inference must be fast, memory-efficient, batch-optimized, numerically correct, and fully aligned with training + evaluation.
+You must ensure:
+•	No redundant computation ❌
+•	No CPU bottlenecks ❌
+•	No incorrect post-processing ❌
+•	No token misalignment ❌
+•	No unnecessary device transfers ❌
+•	No unused inference modules ❌
+________________________________________
+🧭 SCOPE (STRICTLY LIMITED)
+Audit ONLY:
+src/inference/* all files
+Also validate integration with:
+•	src/data/ (tokenized inputs)
+•	src/analysis/ (optional explainability)
+•	src/evaluation/ (metric consistency)
+•	trained model checkpoints
+________________________________________
+🔥 AUDIT DIMENSIONS (INFERENCE-SPECIFIC)
+________________________________________
+1. 🔗 INFERENCE PIPELINE INTEGRITY
+Trace:
+raw input
+→ preprocessing/tokenization
+→ model forward pass
+→ logits/probs
+→ post-processing (thresholding, decoding)
+→ structured output
+MUST VERIFY:
+•	exact match with training pipeline
+•	no missing preprocessing steps
+•	correct output formatting per task
+CRITICAL:
+•	mismatch between training and inference preprocessing ❌
+•	different tokenizer settings ❌
+________________________________________
+2. ⚡ LATENCY & THROUGHPUT OPTIMIZATION (TOP PRIORITY)
+MUST VERIFY:
+•	batch inference supported
+•	dynamic batching or micro-batching
+•	no per-sample inference loops
+FORBIDDEN:
+•	calling model per sample ❌
+•	repeated tokenization ❌
+REQUIRED:
+•	amortized compute across batches
+•	efficient batching strategy
+________________________________________
+3. 🚀 GPU / DEVICE OPTIMIZATION
+MUST CHECK:
+•	model on correct device
+•	inputs moved with non_blocking=True
+•	no CPU↔GPU ping-pong
+CRITICAL:
+•	.cpu() during inference ❌
+•	tensor re-allocation per step ❌
+________________________________________
+4. 🧠 MODEL FORWARD PASS OPTIMIZATION
+MUST VERIFY:
+•	torch.no_grad() used
+•	model.eval() set
+•	optional:
+o	mixed precision (torch.cuda.amp)
+o	torch.compile (if stable)
+CRITICAL:
+•	gradients enabled during inference ❌
+•	dropout active ❌
+________________________________________
+5. 🔄 RECOMPUTATION ELIMINATION
+MUST VERIFY:
+•	tokenizer reused
+•	model loaded once
+•	no repeated feature extraction
+CRITICAL:
+•	recomputing embeddings / features per request ❌
+________________________________________
+6. 📦 BATCHING & MEMORY MANAGEMENT
+MUST VERIFY:
+•	batch size optimized for GPU
+•	no OOM risk
+•	padding handled efficiently
+CHECK:
+•	dynamic padding vs static padding
+•	memory fragmentation
+________________________________________
+7. 🧩 TOKEN ALIGNMENT (CRITICAL)
+Trace:
+tokenizer → model → outputs → decoding
+MUST VERIFY:
+•	consistent token mapping
+•	correct handling of:
+o	padding
+o	truncation
+o	special tokens
+________________________________________
+8. ⚖️ POST-PROCESSING CORRECTNESS
+MUST VERIFY:
+•	correct:
+o	sigmoid (binary / multi-label)
+o	softmax (multi-class)
+•	correct thresholding per task
+CRITICAL:
+•	wrong activation ❌
+•	fixed threshold across tasks ❌
+________________________________________
+9. 🧪 MULTI-TASK OUTPUT HANDLING
+Validate against your schema:
+•	binary tasks
+•	multi-class tasks
+•	multi-label tasks
+•	structured outputs (narrative, entities)
+MUST VERIFY:
+•	correct output formatting per task
+•	no assumption of single-task output
+________________________________________
+10. 💾 MODEL LOADING & WARMUP
+MUST VERIFY:
+•	model loaded once
+•	lazy vs eager loading handled correctly
+•	warmup inference (for latency stabilization)
+CRITICAL:
+•	loading model per request ❌
+________________________________________
+11. 🧹 UNUSED / DEAD INFERENCE CODE
+Detect:
+Module: X
+Status: UNUSED / PARTIAL
+Fix: remove OR integrate
+________________________________________
+12. 🧪 EDGE CASES
+Check:
+•	empty input
+•	extremely long input
+•	batch size = 1
+•	multilingual input
+•	malformed requests
+________________________________________
+13. ⚙️ CONFIG INTEGRATION
+MUST VERIFY:
+•	no hardcoded:
+o	batch size
+o	device
+o	thresholds
+•	config drives inference behavior
+________________________________________
+📊 STRICT OUTPUT FORMAT
+________________________________________
+🔴 1. CRITICAL INFERENCE BUGS
+•	File:
+•	Function:
+•	Issue:
+•	Why it breaks inference:
+•	Exact fix:
+________________________________________
+🟠 2. LATENCY BOTTLENECKS
+•	Location:
+•	Issue:
+•	Fix:
+•	Expected speedup:
+________________________________________
+🟡 3. POST-PROCESSING ERRORS
+________________________________________
+🧠 4. MULTI-TASK FAILURES
+________________________________________
+🚀 5. GPU / DEVICE ISSUES
+________________________________________
+💾 6. MEMORY / BATCHING ISSUES
+________________________________________
+🔄 7. RECOMPUTATION ISSUES
+________________________________________
+🧹 8. UNUSED INFERENCE CODE
+________________________________________
+⚙️ 9. CONFIG ISSUES
+________________________________________
+🧪 10. EDGE CASE FAILURES
+________________________________________
+✅ 11. VERIFIED COMPONENTS
+________________________________________
+📉 12. FINAL SCORE
+•	Score: /10
+•	Why not 10:
+•	Steps to reach ≥9.5:
+________________________________________
+⚠️ MANDATORY RULES
+•	NO vague suggestions
+•	MUST give code-level fixes
+•	MUST prioritize latency
+•	MUST eliminate recomputation
+•	MUST enforce batching
+•	MUST ensure correctness
+________________________________________
+🎯 SUCCESS CRITERIA (INFERENCE LAYER)
+A system where:
+•	Inference is low-latency + high-throughput ✅
+•	Fully batch-optimized ✅
+•	No redundant computation ✅
+•	GPU fully utilized ✅
+•	Outputs are correct + task-aware ✅
+•	System is production-ready ✅
+

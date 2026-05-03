@@ -1,0 +1,219 @@
+Excellent — this log is extremely informative. You’ve successfully moved to a **true multi-task pipeline**, but now you’re hitting a **config–code mismatch**.
+
+Let’s isolate it precisely.
+
+---
+
+# ❌ Root Cause (exact)
+
+From your log :
+
+```text
+SYSTEM FAILED: 'MonitoringConfig' object has no attribute 'throughput_ema_alpha'
+```
+
+And failure line:
+
+```python
+self.throughput_ema = EMA(self.config.throughput_ema_alpha)
+```
+
+👉 Meaning:
+
+> Your **code expects `throughput_ema_alpha`**, but your **config does NOT define it**
+
+---
+
+# 🧠 Why this happened
+
+You likely:
+
+* Updated `monitor_engine.py` (new feature: EMA smoothing)
+* But did NOT update `MonitoringConfig`
+
+👉 Classic **schema drift** between:
+
+* config class
+* runtime usage
+
+---
+
+# ✅ Fix Options (choose one)
+
+---
+
+## 🟢 Option 1 — Add missing field (recommended)
+
+Find your config (YAML or dataclass) and add:
+
+### If YAML:
+
+```yaml
+monitoring:
+  throughput_ema_alpha: 0.1
+```
+
+---
+
+### If Python dataclass:
+
+```python
+@dataclass
+class MonitoringConfig:
+    ...
+    throughput_ema_alpha: float = 0.1
+```
+
+---
+
+👉 This is the **correct fix**
+
+---
+
+## 🟡 Option 2 — Safe fallback in code (defensive fix)
+
+Modify `monitor_engine.py`:
+
+```python
+alpha = getattr(self.config, "throughput_ema_alpha", 0.1)
+self.throughput_ema = EMA(alpha)
+```
+
+👉 Prevents crash if config missing
+
+---
+
+## 🔴 Option 3 — Remove EMA (not recommended)
+
+```python
+self.throughput_ema = None
+```
+
+👉 You lose smoothing — not ideal
+
+---
+
+# ⚠️ Additional Warning You MUST Fix
+
+From your log:
+
+```text
+dropping unknown settings.model fields:
+['compile_mode', 'flash_attention', 'gradient_checkpointing', 'hidden_dim', 'torch_compile']
+```
+
+👉 This is serious.
+
+### Meaning:
+
+Your config includes:
+
+```yaml
+model:
+  torch_compile: true
+  flash_attention: true
+```
+
+BUT your model config **does not accept them**
+
+👉 So:
+
+* torch.compile ❌ not used
+* gradient checkpointing ❌ not used
+* flash attention ❌ ignored
+
+---
+
+# ✅ Fix this properly
+
+You must extend your model config class:
+
+```python
+@dataclass
+class ModelConfig:
+    ...
+    torch_compile: bool = False
+    gradient_checkpointing: bool = False
+    flash_attention: bool = False
+```
+
+---
+
+# 🚀 What you just achieved (important)
+
+This line:
+
+```text
+Creating UNIFIED multi-task trainer
+```
+
+👉 Means you successfully moved from:
+
+```text
+❌ per-task trainers
+```
+
+TO:
+
+```text
+✅ shared encoder + multi-head model
+```
+
+That’s a **major architectural upgrade**
+
+---
+
+# ⚠️ Current blocker summary
+
+| Issue                          | Type        | Fix           |
+| ------------------------------ | ----------- | ------------- |
+| `throughput_ema_alpha` missing | crash       | add to config |
+| model fields dropped           | silent bug  | extend config |
+| training not started           | consequence | fix above     |
+
+---
+
+# 🧪 After fix, expect:
+
+```text
+MultiTaskTruthLensModel initialized
+LossEngine initialized
+TaskScheduler initialized
+MonitoringEngine initialized   ✅
+Training starts 🚀
+```
+
+---
+
+# 🧠 Strong Recommendation
+
+Do BOTH:
+
+### 1. Fix monitoring config
+
+### 2. Fix model config fields
+
+Otherwise you’ll:
+
+* lose performance features
+* silently degrade training
+
+---
+
+# 🚀 If you want next step
+
+I can:
+
+### 🔧 Patch your config classes cleanly (no more missing fields)
+
+### ⚡ Enable torch.compile + checkpointing properly (H100 optimization)
+
+### 🧠 Tune multitask loss balancing (your next bottleneck)
+
+---
+
+Just say:
+
+👉 **“fix config fully”**
+or
+👉 **“optimize multitask training now”**

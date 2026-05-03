@@ -1,0 +1,195 @@
+I have enough information to deliver the audit. Here is the deep production-grade review of src/analysis/.
+________________________________________
+Analysis Layer Audit — src/analysis/
+Scope: 36 files / 8,448 LOC. Reviewed: pipeline, registry, orchestrator, batch processor, FeatureContext, spaCy loader, all 14 analyzers, propaganda detector, profile builder, schema/keys/output models, multi-task validator, label_analysis, preprocessing.
+________________________________________
+🔴 Section 1 — Critical Bugs (will misfire in production)
+CRIT-A1 — BatchProcessor._run_batch passes List[FeatureContext] to a List[str] API
+AnalysisPipeline.run_batch(texts: List[str]) calls self.nlp.pipe(texts, ...). BatchProcessor._run_batch builds contexts = [FeatureContext(...) for t in texts] and calls self.pipeline.run_batch(contexts) (batch_processor.py:142). spaCy's nlp.pipe will raise on non-string inputs and the whole batch falls into the except → _fallback_batch path (batch_processor.py:161) — so the "fast batch" code path is dead and every batch silently degrades to per-item single-thread execution.
+Fix: self.pipeline.run_batch(list(texts)) (pass the raw strings) and rely on from_doc for ctx, OR add a run_batch_contexts(contexts) overload on AnalysisPipeline that uses nlp.pipe([c.text for c in contexts]) and zips back into the supplied contexts (preserving any externally-set shared slots).
+CRIT-A2 — Shared shared_cache across batch items causes spaCy doc cross-contamination
+In _run_batch and _fallback_batch (batch_processor.py:128, 170) every FeatureContext in the batch receives the same shared_cache dict. spacy_loader.get_doc writes into context.shared.setdefault("spacy_docs", {})[task] = doc. So the first item's doc is cached under "syntax"/"ner" and every subsequent item gets the wrong doc (different text). Combined with CRIT-A1, the fallback path (which is the only one that actually runs) produces feature vectors derived from item 0's doc for every item in the batch.
+Fix: Each context must have its own shared dict: FeatureContext(text=t, shared={}, cache={}). If you actually want to share across-batch immutable resources (lexicons, matchers, NLP handles), put them on a separate BatchResources object — not on a per-text doc cache.
+CRIT-A3 — analysis_config.default_orders keys do not match registered analyzer names
+Registry names are rhetorical_devices, argument_mining, context_omission, discourse_coherence, emotion_target, framing, information_density, information_omission, ideological_language, narrative_conflict, narrative_propagation, narrative_temporal, narrative_roles, source_attribution, propaganda_pattern. default_orders uses short aliases ("rhetorical", "argument", "omission", "conflict", "propagation", "temporal", "source", "ideology"). Result: ablation flags, ordering, and per-analyzer enabled=False from the global config silently no-op for every analyzer. narrative_roles is also missing entirely.
+Fix: Replace default_orders keys with the canonical registry names exactly. Add a self-test in build_default_config() that imports ALL_FEATURE_KEYS and asserts set(config.analyzers).issubset(ALL_FEATURE_KEYS.keys()).
+CRIT-A4 — output_models.InformationFeatures / IdeologyFeatures / SourceAttributionFeatures schema drift
+Pydantic models drop fields that the analyzers actually emit and that *_KEYS enumerate:
+•	InformationFeatures — missing information_diversity.
+•	IdeologyFeatures — missing ideology_diversity.
+•	SourceAttributionFeatures — missing attribution_intensity and attribution_diversity.
+to_vector(*_KEYS) will read getattr(self, "information_diversity", ...) → returns 0/None, while feature_merger (which uses dict→tuple zips) outputs the real value. Two consumers, two answers. Same problem for BiasProfile which has no argument section while BiasProfileBuilder.build_profile always populates one.
+Fix: Add the missing fields to each pydantic model and add argument: Dict[str, float] to BiasProfile. Add a CI test: for every *Features model and matching *_KEYS tuple, assert set(model.model_fields) == set(keys).
+CRIT-A5 — AnalyzerRegistry.run_all forwards extra_inputs as **kwargs to every analyzer
+analysis_registry.py:152 does kwargs = dict(extra_inputs) then calls analyzer.analyze(ctx, **kwargs). Most analyzers (ArgumentMiningAnalyzer.analyze(self, ctx), FramingAnalyzer.analyze(self, ctx), etc.) take only ctx — passing hero_entities=..., emotion_features=..., etc. raises TypeError. Today _extra_inputs returns {}, so this works by accident; the moment anyone wires the documented "narrative role → narrative_conflict" hand-off it will explode for every other analyzer.
+Fix: Filter kwargs by inspect.signature(analyzer.analyze).parameters (cache the parameter set on the analyzer at registration time). Or define a typed extra_inputs contract per analyzer and route explicitly.
+CRIT-A6 — EmotionTargetAnalyzer._ensure_matcher builds PhraseMatcher against the wrong vocab
+PhraseMatcher(doc.vocab, attr="LOWER") is built once with the first doc's vocab; phrase patterns are then created via get_task_nlp("ner").make_doc(text), which uses the task nlp's vocab (get_task_nlp("ner")). On the very first call this works because the seeded doc is from the same vocab — but only if the doc was produced by the cached "ner"-task nlp. If analysis_pipeline.run_batch seeds via from_doc from the "safe" shared nlp (a different Language instance with different Vocab), PhraseMatcher raises or silently fails to match. Also the matcher is initialized lazily but self.matcher is None until then; in long-lived workers a process restart loses it, and the matcher is not thread-safe — it's mutated from _ensure_matcher while concurrent requests can call analyze.
+Fix: Build the matcher in __init__ against get_task_nlp("ner").vocab, then in analyze only call matcher(doc) — and assert doc.vocab is matcher.vocab (raise / fall through to token matching otherwise). Make from_doc seed the same Vocab by always using get_shared_nlp("safe") whose vocab is the one tasks share (verify they're loaded from the same model).
+CRIT-A7 — from_doc seeds the same doc into both "syntax" and "ner" caches even in "fast" mode
+AnalysisPipeline can be configured with pipeline.mode="fast" (spacy_loader._SHARED_MODE_DISABLE["fast"] disables ner, tagger, parser, attribute_ruler, lemmatizer). FeatureContext.from_doc then writes that stripped doc to shared["spacy_docs"]["ner"] (feature_context.py:104). Every NER-dependent analyzer (source_attribution, context_omission, emotion_target, narrative_role, discourse._narrative_continuity) then iterates doc.ents == (), returns 0 for named_source_ratio, context_entity_ratio, etc. — no error, just silently wrong features.
+Fix: Pass mode through to from_doc(doc, mode) and only seed the tasks the doc actually supports; otherwise let get_doc re-parse for the missing task. Better: forbid "fast" mode unless every registered analyzer declares requires_ner = False etc., and validate at startup.
+CRIT-A8 — BatchProcessor exception fallback re-uses corrupted shared_cache
+Even after fixing CRIT-A2, line batch_processor.py:170 passes the same shared_cache (which already contains item-0's spaCy docs from the failed batch run) into the fallback's per-item FeatureContext. So the fallback also returns features computed against item-0's doc.
+Fix: Allocate a fresh shared={} per item in _fallback_batch.
+________________________________________
+🟠 Section 2 — High-Severity Correctness Issues
+HIGH-A1 — extract_alpha_lemmas filters stopwords; ratios that divide by n_tokens are inflated
+FeatureContext.ensure_tokens sets n_tokens = len(extract_alpha_lemmas(doc)) (alpha-only, stopwords removed). Every analyzer then computes count / n_tokens. For a 100-token sentence with 60 stopwords, the same lexicon hit count gets divided by 40 instead of 100 → 2.5× inflation vs. true token density, and the inflation factor varies wildly with text style (news vs. tweets).
+Fix: Track n_raw_tokens = len(doc) and n_content_tokens = len(extract_alpha_lemmas(doc)) separately; have analyzers pick the right denominator (lexicon density should use n_raw_tokens; type/lemma diversity should use n_content_tokens).
+HIGH-A2 — _density(...) double-counts unigrams found via both token-counts and phrase_match_count
+Almost every analyzer (framing, info_density, info_omission, narrative_conflict, narrative_temporal, source_attribution, rhetorical_device, narrative_propagation) does 0.7 * token_score + 0.3 * phrase_score, but phrase_match_count matches all lexicon entries (including unigrams), so single-word terms are counted in both. The "weighted fusion" comment claims "prevents double counting" — it does not.
+Fix: Split lexicons into unigrams (use term_ratio) and phrases (use phrase_match_count), or filter phrase_match_count to entries containing whitespace before fusion.
+HIGH-A3 — _normalize collapses absolute intensity to a probability simplex, then re-clipped to [0,1]
+In framing, information_density, ideological_language, narrative_temporal, narrative_propagation, source_attribution, rhetorical_devices, the per-category raw density is normalized to value / sum(values). After this, "fully absent" and "fully present" both yield the same shape distribution; a text saturated with conflict and a text with one conflict word produce identical frame_conflict_score (they both sum to 1). The downstream propaganda_pattern_detector._fear/_polarization/... reads these as if they were intensities (in [0,1]) — they're not.
+Fix: Emit BOTH absolute density (*_density) and normalized share (*_share) under separate keys. Have propaganda detector use the absolute density, not the share.
+HIGH-A4 — narrative_conflict._punctuation and _density divide text.count("!") by n_tokens (lemmatized count)
+Combined with HIGH-A1 the punctuation ratios can exceed 1.0 routinely (then get clipped). They also count ? inside URLs, code, etc. Use len([t for t in doc if t.is_punct and t.text == '!']) against len(doc).
+HIGH-A5 — discourse_coherence._narrative_continuity rewards entity repetition but flags it as narrative_continuity
+Code: repetition = 1 - unique/total. A text mentioning "Trump, Trump, Trump" → high "continuity"; a text discussing 5 different people → low. This is entity repetition, not narrative continuity. It also breaks BiasProfile.discourse interpretation downstream.
+Fix: Rename the key to entity_repetition_ratio (and update DISCOURSE_COHERENCE_KEYS, output_models, bias_profile_vector) or replace with coreference-chain-density if you want the original semantics.
+HIGH-A6 — source_attribution._quote_density counts character matches, not quote pairs
+re.compile(r'[\"""]+').findall returns runs; then score = sum(len(m) for m in matches). So "hello" adds 2 to score. Quote density should count quoted spans (paired), not opening glyphs.
+Fix: len(matches) // 2 and use a paired regex r'"([^"]+)"|"([^"]+)"'.
+HIGH-A7 — bias_profile_builder._global_normalize runs after per-section min-max normalization
+_process_section already minmax-normalizes each section into [0,1]; then _global_normalize minmax-normalizes the combined pool. With per-section normalization, every section already contains a 0 and a 1, so global normalization is a near-identity operation that wastes work and also destroys cross-section comparability when a section happens to have only one feature (its single value becomes 0/0 → returns the unmodified data and section 0/1 means nothing).
+Fix: Pick one. If you want global comparability, skip per-section normalization (just sanitize/clip) and only do the global pass. Add a regression test for "single-feature section".
+HIGH-A8 — bias_profile_builder._softmax is applied after ideology was already minmax-normalized into [0,1]
+apply_softmax_to_ideology=True runs _softmax on an already-normalized vector. softmax of [0, 0.33, 0.66, 1.0] flattens enormously (max ≈ 0.41). The downstream ideology_dominance metric is thus permanently bounded around 0.4 regardless of the input distribution.
+Fix: Apply softmax to the raw ideology scores (skip _process_section for ideology when apply_softmax_to_ideology=True).
+HIGH-A9 — bias_profile_vector mixes section names and schema names, and silently drops narrative rows
+sections = {"bias": "framing", ..., "narrative": "framing", ...} reuses the framing schema for the narrative section. So both lookups expand to the same 7 framing keys, and real narrative features (hero_ratio, conflict_intensity, etc.) are never in the vector. Also missing: argument, narrative_propagation, narrative_temporal, narrative_role, source_attribution, context_omission, information_omission, propaganda_pattern.
+Fix: Build the vector by iterating ALL_FEATURE_KEYS in a deterministic registry order; bias_profile_vector should mirror feature_merger.to_vector.
+HIGH-A10 — propaganda_pattern_detector._fear calls self._get(narrative, "conflict_intensity", "polarization_ratio") — picks the first present key
+_get(..., *keys) returns the first key whose value is finite. If conflict_intensity exists with value 0.0 (which it always does after _empty()), polarization_ratio is never read. This is correct as a "first non-missing" lookup but wrong here as "best available signal" — the detector should add/average the two, not pick one.
+Fix: Change _fear (and audit every other _get with multiple keys) to compute mean([_get(d, k) for k in keys if k in d]) or document the precedence semantics explicitly.
+HIGH-A11 — feature_merger collisions: opposition_marker_ratio, polarization_ratio, conflict_exclamation_ratio, conflict_question_ratio are emitted by both narrative_conflict and narrative_propagation
+Whichever runs last overwrites. The merged feature dict and the "single source of truth" in *_KEYS both list these duplicates without disambiguation.
+Fix: Either prefix by analyzer (nc_polarization_ratio vs np_polarization_ratio) or run only one of the two (and remove the other from registry / drop the dup keys).
+________________________________________
+🟡 Section 3 — Performance Issues
+PERF-A1 — _punctuation in propagation/conflict/info_density does text.count("!") and text.count("?") on every call, on the original text
+Cheap individually but called per analyzer per item. Cache exclaim_count and question_count on FeatureContext once.
+PERF-A2 — phrase_match_count is called N×L times per item
+Every analyzer iterates its lexicon and calls phrase_match_count(text_lower, lexicon). For 14 analyzers × ~6 lexicons × phrase scan you're re-scanning the text dozens of times. Build a single Aho-Corasick automaton (pyahocorasick or spaCy PhraseMatcher) once at startup keyed by all phrases, and have each analyzer pull its hits from a shared ctx.shared["phrase_hits"] dict keyed by lexicon-id.
+PERF-A3 — EmotionTargetAnalyzer._ensure_matcher rebuilds the entire PhraseMatcher per analyzer instance (process)
+_ensure_matcher is gated by _matcher_initialized but the analyzer instance is per-process per AnalyzerRegistry. Also it imports inside the loop (from src.analysis.spacy_loader import get_task_nlp) inside each pattern build. Move _ensure_matcher to __init__ (after a one-shot vocab fetch).
+PERF-A4 — preprocessing.py ProcessPoolExecutor forks spaCy per worker
+spaCy + transformers loaded into each forked worker; for any meaningful batch size this is slower than a single-process nlp.pipe. Either use nlp.pipe(..., n_process=N) (which uses spaCy's tuned pickle path) or drop the pool.
+PERF-A5 — analysis_pipeline.run_batch discards spaCy multiprocessing potential
+Hardcodes n_process=1. For CPU-bound batches > 50 items this is a 4-8× regression vs n_process=ANALYSIS_CONFIG.spacy.n_process.
+PERF-A6 — bias_profile_builder._normalize allocates two numpy arrays per section per request
+For 6 sections with ~7 features each this is fine but _global_normalize re-walks the same lists. Compute once into a single np.concatenate and slice back.
+PERF-A7 — discourse_coherence._safe_jaccard builds Python sets of lemmas per sentence
+For long docs this allocates O(sentences × tokens) sets every request. Cache sent_lemma_sets on ctx.shared["disc_sent_lemmas"] so repeated runs (or other analyzers wanting sentence lemmas) reuse it.
+________________________________________
+🟢 Section 4 — FeatureContext Usage Audit
+Analyzer	Uses ensure_tokens	Uses text_lower correctly	Reads n_tokens	Issues
+rhetorical_devices	✅	✅	✅	HIGH-A2, HIGH-A4
+argument_mining	reads ctx.tokens directly (no ensure_tokens)	✅	✅	If batch path skips ensure_tokens, ctx.tokens is None → tokens = ctx.tokens or [] → n_tokens=0 → _empty_features. Silent zeroing of all argument features.
+context_omission	reads ctx.n_tokens directly	✅	could be None	Same as argument_mining — if ctx.n_tokens == 0 raises TypeError: '==' between None and int if not pre-warmed. Add ctx.ensure_tokens() at top.
+discourse_coherence	reads ctx.n_tokens directly	✅	could be None	Same.
+emotion_target	reads ctx.n_tokens directly	n/a	could be None	Same.
+framing	✅	✅	✅	HIGH-A2, HIGH-A3
+information_density	✅	✅	✅	HIGH-A2, HIGH-A3
+information_omission	✅	✅	✅	HIGH-A2
+ideological_language	✅	✅	✅	HIGH-A2
+narrative_conflict	✅	✅	✅	HIGH-A2, HIGH-A4
+narrative_propagation	✅	✅	✅	HIGH-A2
+narrative_role	❌ never calls ensure_tokens; only uses doc	n/a	n/a	OK
+narrative_temporal	✅	✅	✅	HIGH-A2
+source_attribution	✅	✅	✅	HIGH-A6, double-count
+propaganda_pattern	n/a	n/a	n/a	HIGH-A10, HIGH-A11
+Fix: Make BaseAnalyzer.run (or analyze wrapper) call ctx.ensure_tokens() automatically before invoking the subclass. That removes 5 latent NoneType bugs and the inconsistency.
+________________________________________
+🔵 Section 5 — Numerical Stability
+•	_entropy divides entropy / max_entropy + EPS then divides by (max_entropy + EPS). When len(probs) == 1, max_entropy = log(1) = 0. Several callers (ideological_language._entropy with 4 categories, etc.) are safe by construction; but propaganda_pattern_detector._entropy correctly guards n <= 1. Promote that guard to a shared util.
+•	_softmax in bias_profile_builder uses stable subtraction but adds EPS to denominator unnecessarily — exp.sum() is always > 0 once exp is computed; drop the EPS.
+•	bias_profile_builder._normalize "robust" branch uses iqr = p75 - p25, doesn't recenter to median = 0 cleanly; clipped to [0,1] afterward, so negative scores wrap to 0. Guard with tanh or rescale to [0,1] explicitly.
+•	_safe everywhere clips to [0, 1] even for legitimately negative deltas (e.g., liberty - equality before mapping). This is fine here but bias_profile_builder returns negative z-scores to _clip which floors them to 0 — the resulting "bias" section is monotone-zero on the lower half.
+•	narrative_temporal.contrast = std(dist.values()) of a 3-element distribution (max ~0.47); never normalized. Reported as [0,1] after _safe but in practice maxes at 0.47 → users will misinterpret.
+________________________________________
+🟣 Section 6 — GPU / Torch Usage
+•	spacy_loader._maybe_enable_gpu() calls spacy.prefer_gpu() globally once per process whenever ENABLE_GPU is set, but it does so inside get_nlp after the cache check, and only the first model load triggers it. If a CPU-only model loads first (warmup), GPU never engages. Move _maybe_enable_gpu into the module bootstrap (or first-call sentinel).
+•	No torch.set_num_threads / no thread-affinity; with nlp.pipe(n_process=N) and torch BLAS this oversubscribes cores.
+•	No analyzers call torch directly — but EmotionTargetAnalyzer.PhraseMatcher allocates a fresh matcher each process; OK on CPU, but on GPU the vocab transfer is non-trivial.
+•	TASK_DISABLE_MAP is unused at runtime in the hot path — get_task_nlp resolves it but TASK_DISABLE_MAP itself is empty for "syntax"/"ner" in spacy_config.py, so no actual pipeline pruning happens. You're paying full pipeline cost on every doc even when an analyzer only needs the tagger.
+Fix: Populate TASK_DISABLE_MAP ("syntax": ("ner",), "ner": ("parser", "lemmatizer") if your model supports it) and validate at startup that every analyzer's required components are present.
+________________________________________
+⚪ Section 7 — Unused / Dead Analyzers
+Cross-checked analysis_registry registrations vs. references:
+•	MultiTaskValidator (multitask_validator.py) — defined; not imported by analysis_pipeline, orchestrator, or batch_processor. Dead.
+•	label_analysis.py — used only by integration_runner; not by the pipeline. OK if intentional, but its outputs are not part of feature_keys or output_models so any consumer relying on them is custom.
+•	preprocessing.py — defines ProcessPoolExecutor-based bulk preprocessing; not invoked by AnalysisPipeline/BatchProcessor. Dead in the analysis hot path.
+•	bias_profile_vector — referenced by no other module (rg shows zero callers). Dead.
+•	feature_merger.to_vector — used by analysis_pipeline._post_process ✅.
+•	propaganda_pattern_detector — registered? Verify analysis_registry includes it; _extra_inputs is {} so even if registered it never receives the upstream features it needs (it would always return zeros via or {}). Either remove it from the registry or wire _extra_inputs to pass {"emotion_features": results["emotion_target"].output, ...} after a topological sort that runs propaganda last.
+________________________________________
+🟤 Section 8 — Multi-task / Multi-output Compatibility
+•	feature_merger.merge produces a flat dict with the duplicate keys flagged in HIGH-A11; downstream multi-task heads keyed off *_KEYS will see only the last-write-wins values.
+•	BiasProfile model lacks argument, narrative_propagation, narrative_temporal, source_attribution, context_omission, information_omission sections, so a multi-task model conditioning on the profile sees a sparse, biased view.
+•	PipelineOutput exposes rhetorical, argument, context, discourse, emotion, framing, information, ideology, source — missing narrative_*, propaganda, information_omission. Multi-task downstream loaders will silently miss those branches.
+•	propaganda_pattern_detector._get semantics ("first present key") makes feature ablation studies unreproducible: removing one analyzer changes which fallback key fires.
+Fix: Make PipelineOutput and BiasProfile derived from ALL_FEATURE_KEYS (one section per registered analyzer) via a generated typed dict; add a CI test asserting the model field set equals the registry.
+________________________________________
+⚫ Section 9 — Edge Cases (verified by reading branches)
+Edge case	Behavior	Verdict
+Empty string	BatchProcessor clips text length, _validate raises only on non-str. Empty → n_tokens=0 → _empty() per analyzer ✅	OK
+Single-character text	spaCy parses, n_tokens=0 after extract_alpha_lemmas → _empty()	OK
+All-stopwords text ("the the the")	n_tokens=0 (stopwords filtered) → _empty() even though real tokens exist	bug — see HIGH-A1
+1 sentence document	discourse_coherence returns _empty_features (needs ≥2). Vector zero. OK	
+Doc with no entities	source_attribution.named_source_ratio = 0, context_omission.context_entity_ratio = 0 ✅	OK
+Non-ASCII / unicode quotes	source_attribution.QUOTE_PATTERN includes """ ✅; context_omission.QUOTE_PATTERN includes ' (curly apostrophe!) → false-positive quotes for any contraction ("don't", "it's").	bug
+Very long doc (>500k chars)	nlp.pipe will OOM with default model; no max_length guard.	bug — set nlp.max_length and pre-truncate in _validate.
+Concurrent requests	EmotionTargetAnalyzer.matcher mutated lazily without lock.	CRIT-A6
+text=None in batch	BatchProcessor.process doesn't validate; FeatureContext.__post_init__ raises TypeError per item; the surrounding try/except in _run_batch catches everything → entire batch falls to fallback → fallback also raises and yields _empty_result ✅	OK but very slow path.
+Numeric overflow in entropy with EPS=1e-9	np.log(EPS) ≈ -20.7, multiplied by ~0 prob → 0. Safe.	OK
+________________________________________
+📊 Section 10 — Strengths Worth Keeping
+•	Single source of truth for feature keys (feature_keys.py) — clean and re-exported.
+•	_safe(value) clip + finite check is uniformly applied to every output.
+•	BaseAnalyzer pattern with expected_keys and per-context cache is solid scaffolding.
+•	spacy_loader._CACHE is correctly thread-safe (RLock + double-checked locking).
+•	bias_profile_builder._softmax uses max-subtraction stability.
+•	analysis_pipeline.run_batch correctly uses nlp.pipe + from_doc to materialize the doc once across all analyzers.
+•	propaganda_pattern_detector has explicit, well-documented config dataclass and clip/validation toggles.
+________________________________________
+🛠 Section 11 — Prioritized Fix Plan
+ID	File	Severity	Fix
+F1	batch_processor.py:128,142,170	CRIT-A1+A2+A8	Pass texts (strings) into pipeline.run_batch; allocate fresh shared={} per ctx in fallback.
+F2	analysis_config.py:179	CRIT-A3	Replace default_orders keys with canonical registry names; assert at startup.
+F3	output_models.py	CRIT-A4	Add missing fields (information_diversity, ideology_diversity, attribution_intensity, attribution_diversity, argument); add model_fields == keys test.
+F4	analysis_registry.py:152	CRIT-A5	Filter extra_inputs by analyzer's analyze signature.
+F5	emotion_target_analysis.py:73-105	CRIT-A6	Build PhraseMatcher in __init__ against get_task_nlp("ner").vocab; assert doc.vocab is matcher.vocab.
+F6	feature_context.py:from_doc + pipeline mode	CRIT-A7	Forbid seeding "ner" cache when pipeline mode is "fast"; fall back to lazy parse.
+F7	_text_features.extract_alpha_lemmas + feature_context	HIGH-A1	Track raw and content token counts separately; route lexicon densities to raw count.
+F8	every analyzer's _density	HIGH-A2	Split lexicons into unigrams/phrases; stop double-counting.
+F9	every analyzer that calls _normalize	HIGH-A3	Emit absolute density alongside the normalized share; have downstream consumers read absolutes.
+F10	propaganda_pattern_detector._fear and _get callsites	HIGH-A10	Replace "first present" with explicit aggregation.
+F11	feature_keys.py + narrative_propagation/narrative_conflict	HIGH-A11	De-duplicate overlapping keys (prefix or remove one analyzer).
+F12	bias_profile_builder._global_normalize / _softmax	HIGH-A7+A8	Skip per-section normalization when global is on; softmax raw ideology.
+F13	bias_profile_vector	HIGH-A9	Iterate ALL_FEATURE_KEYS deterministically; align with feature_merger.to_vector.
+F14	discourse_coherence._narrative_continuity	HIGH-A5	Rename to entity_repetition_ratio and update keys/models.
+F15	source_attribution._quote_density + context_omission.QUOTE_PATTERN	HIGH-A6 + edge-case	Pair-quote regex; remove ' from quote pattern.
+F16	BaseAnalyzer	HIGH-A (multi)	Auto-call ctx.ensure_tokens() in the wrapper; remove all ctx.n_tokens == 0 raw checks.
+F17	analysis_pipeline.run_batch:n_process=1 + preprocessing.py	PERF-A4+A5	Drop ProcessPoolExecutor; use nlp.pipe(n_process=ANALYSIS_CONFIG.spacy.n_process).
+F18	_text_features + analyzers	PERF-A2	Build a single shared phrase automaton; cache hits on ctx.shared.
+F19	spacy_config.TASK_DISABLE_MAP	GPU-3	Populate task-disable lists so "syntax"/"ner" actually prune.
+F20	multitask_validator.py, bias_profile_vector, preprocessing.py	DEAD	Remove or wire in.
+________________________________________
+📉 Section 12 — Final Score
+Dimension	Score (/10)	Notes
+Pipeline integrity	4	CRIT-A1/A2/A8 — batch path is broken
+Feature validity	5	HIGH-A2/A3/A5 distort downstream signals
+Token / context alignment	5	HIGH-A1 + 5 analyzers skip ensure_tokens
+Performance	6	OK single-item; batch and matcher rebuilds wasted
+FeatureContext usage	6	Inconsistent; needs base-class hook
+Numerical stability	8	Mostly solid; minor entropy/clip edge cases
+Aggregation (merger, profile)	4	HIGH-A9, dup keys, missing sections, broken vector
+GPU / spaCy config	6	Disable maps empty; GPU init brittle
+Unused analyzers / wiring	5	propaganda detector unwired; 3 dead modules
+Multi-task compatibility	5	PipelineOutput/BiasProfile desynced from registry
+Edge cases	7	Most handled; quote regex + max_length gaps
+Overall: 5.5 / 10 — sound architecture and good schema discipline, undermined by a broken batch path, schema/registry drift, double-counted lexicon scoring, and an aggregation layer that erases half the analyzers' outputs. Fix F1–F6 first (CRIT) before any production rollout; F7–F13 (HIGH) before the next training run; the rest are quality/perf hardening.
+Checkpoint made1 minute ago
+

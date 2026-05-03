@@ -1,0 +1,230 @@
+Great—this log exposes a **clean, well-isolated architectural bug** in your new **unified multi-task system**. Let’s fix it properly.
+
+---
+
+# 🚨 FAILURE (Precise)
+
+```text
+ValueError: Unknown task_type: multiclass
+```
+
+📍 Source: 
+
+---
+
+# 🧠 What Broke
+
+Your pipeline defines task types as:
+
+```text
+task_types = {
+  'emotion': 'multilabel',
+  'ideology': 'multiclass',
+  'narrative': 'multilabel',
+  'bias': 'multiclass',
+  'narrative_frame': 'multilabel',
+  'propaganda': 'multiclass'
+}
+```
+
+✔ This is correct.
+
+---
+
+## ❌ But your `coverage_tracker.py` does NOT support `"multiclass"`
+
+From stack trace:
+
+```text
+coverage_tracker.py → line 101
+raise ValueError(f"Unknown task_type: {task_type}")
+```
+
+👉 It likely only supports:
+
+```python
+["multilabel", "classification"]  # or similar
+```
+
+---
+
+# 🔥 Root Cause
+
+You introduced **new naming (`multiclass`)**, but your internal system still expects **old naming (`classification`)**.
+
+👉 Classic enum mismatch.
+
+---
+
+# ✅ FIX (Best, Minimal, Correct)
+
+## 🔧 Option 1 — Normalize task types (RECOMMENDED)
+
+Inside your trainer setup (or right after config load):
+
+```python
+def normalize_task_type(task_type: str):
+    if task_type == "multiclass":
+        return "classification"
+    return task_type
+```
+
+Then:
+
+```python
+task_types = {
+    k: normalize_task_type(v)
+    for k, v in task_types.items()
+}
+```
+
+---
+
+## 🔧 Option 2 — Patch `coverage_tracker.py` (cleaner long-term)
+
+Open:
+
+```text
+src/models/loss/coverage_tracker.py
+```
+
+---
+
+### Find:
+
+```python
+if task_type == "multilabel":
+    ...
+elif task_type == "classification":
+    ...
+else:
+    raise ValueError(...)
+```
+
+---
+
+### Replace with:
+
+```python
+if task_type in ["multilabel"]:
+    ...
+elif task_type in ["classification", "multiclass"]:
+    ...
+else:
+    raise ValueError(f"Unknown task_type: {task_type}")
+```
+
+---
+
+## 🔧 Option 3 — Standardize globally (BEST ARCHITECTURE)
+
+Pick ONE convention:
+
+```python
+MULTILABEL
+MULTICLASS
+```
+
+Then update everywhere:
+
+* dataset_factory
+* loss_engine
+* coverage_tracker
+* evaluation_engine
+
+👉 This avoids future silent bugs
+
+---
+
+# ⚠️ Why This Matters
+
+This is NOT just a naming issue.
+
+Your system uses `task_type` to control:
+
+* loss function (BCE vs CE)
+* normalization
+* coverage tracking
+* metrics
+
+👉 Wrong mapping = wrong training behavior
+
+---
+
+# 🧠 What’s Working (Important)
+
+From your log:
+
+```text
+MultiLabelHead initialized | num_labels=11  ✅
+ClassificationHead initialized | num_classes=3 ✅
+MultiTaskTruthLensModel initialized ✅
+```
+
+👉 Your **dynamic label fix is now correct** ✔
+
+This is a big improvement over earlier runs.
+
+---
+
+# ⚡ System Status Now
+
+| Component             | Status            |
+| --------------------- | ----------------- |
+| Data pipeline         | ✅ solid           |
+| Multi-task loader     | ✅ working         |
+| Model architecture    | ✅ correct         |
+| Label alignment       | ✅ fixed           |
+| Loss routing          | ⚠️ mostly correct |
+| **Task type mapping** | ❌ BROKEN          |
+
+---
+
+# 🎯 Final Fix Plan
+
+## MUST DO
+
+✔ Patch `coverage_tracker.py` OR normalize task types
+
+---
+
+## SHOULD DO (future-proof)
+
+Create enum:
+
+```python
+class TaskType:
+    MULTILABEL = "multilabel"
+    MULTICLASS = "multiclass"
+```
+
+And use everywhere
+
+---
+
+# 🚀 After Fix
+
+Once you fix this:
+
+* sanity check → passes ✅
+* unified training starts ✅
+* multi-task system fully operational ✅
+
+---
+
+# 🧩 Bottom Line
+
+> Your system is now **architecturally correct**, but failing on a **string mismatch**
+
+This is the easiest class of bug—and you’re at the final stage.
+
+---
+
+# 💬 If you want next step
+
+I can:
+
+* Audit your **entire multi-task pipeline for consistency (task types, heads, loss, metrics)**
+* Or help you implement **true weighted multi-task balancing (SOTA level)**
+
+You're now very close to a **production-grade multi-task system** 🚀

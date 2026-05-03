@@ -1,0 +1,199 @@
+You’ve hit a **config–schema mismatch again**—same pattern as before, just in `TrainingConfig`.
+
+---
+
+# 🚨 Root Cause
+
+```text
+TrainingConfig.__init__() got an unexpected keyword argument 'min_epochs'
+```
+
+👉 Your YAML/config now contains:
+
+```yaml
+training:
+  min_epochs: 4
+```
+
+❌ But your `TrainingConfig` class **does NOT define `min_epochs`**
+
+---
+
+# ✅ Correct Fix (Do THIS)
+
+## 🔧 Step 1 — Update `TrainingConfig`
+
+Open:
+
+```text
+src/config/config_schema.py   (or wherever TrainingConfig is defined)
+```
+
+---
+
+### Add fields:
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class TrainingConfig:
+    epochs: int
+
+    # ✅ ADD THESE
+    min_epochs: int = 1
+    max_epochs: int = 10
+    patience: int = 2
+    monitor_metric: str = "avg_score"
+    mode: str = "max"
+```
+
+---
+
+# ⚠️ Important
+
+If you already have:
+
+```python
+epochs: int
+```
+
+👉 Then treat it as:
+
+```python
+max_epochs = epochs
+```
+
+OR remove `epochs` entirely and use `max_epochs`.
+
+---
+
+# 🔧 Step 2 — Fix config YAML
+
+Update your config:
+
+```yaml
+training:
+  min_epochs: 4
+  max_epochs: 10
+  patience: 2
+  monitor_metric: avg_score
+```
+
+❌ Remove old:
+
+```yaml
+epochs: 4   # REMOVE if conflicting
+```
+
+---
+
+# 🔧 Step 3 — Fix training loop usage
+
+Where you currently use:
+
+```python
+for epoch in range(1, config.training.epochs + 1):
+```
+
+---
+
+### Replace with:
+
+```python
+min_epochs = config.training.min_epochs
+max_epochs = config.training.max_epochs
+patience = config.training.patience
+```
+
+Then use the loop I gave earlier.
+
+---
+
+# ⚠️ Alternative (Quick Patch — NOT recommended)
+
+If you don’t want to modify schema:
+
+```yaml
+training:
+  epochs: 10   # keep this
+```
+
+And hardcode:
+
+```python
+min_epochs = 4
+```
+
+👉 But this is **bad design** (not configurable)
+
+---
+
+# 🧠 Why This Keeps Happening
+
+Your system uses:
+
+```python
+TrainingConfig(**raw["training"])
+```
+
+👉 This requires:
+
+> YAML keys == dataclass fields EXACTLY
+
+---
+
+# 🚀 Optional (Make system future-proof)
+
+Instead of crashing on unknown keys:
+
+```python
+from dataclasses import fields
+
+def safe_init(cls, data):
+    allowed = {f.name for f in fields(cls)}
+    filtered = {k: v for k, v in data.items() if k in allowed}
+    return cls(**filtered)
+```
+
+---
+
+# ⚠️ Also Fix This (from your log)
+
+```text
+RequestsDependencyWarning
+```
+
+👉 Same issue as before:
+
+```bash
+pip uninstall chardet -y
+```
+
+---
+
+# 🎯 Final Summary
+
+| Issue              | Fix                           |
+| ------------------ | ----------------------------- |
+| `min_epochs` error | Add to `TrainingConfig`       |
+| training loop      | use `min_epochs + max_epochs` |
+| YAML mismatch      | update config                 |
+| requests warning   | remove `chardet`              |
+
+---
+
+# 🚀 After This
+
+Your system will:
+
+✔ Train minimum 4 epochs
+✔ Continue up to 10 if improving
+✔ Stop early if stagnating
+
+---
+
+If you want, I can now:
+
+* Integrate this directly into your **existing trainer class (exact file-level patch)**
+* Or make a **fully generic early stopping module reusable across all tasks**

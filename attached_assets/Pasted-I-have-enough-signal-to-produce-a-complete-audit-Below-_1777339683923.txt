@@ -1,0 +1,236 @@
+I have enough signal to produce a complete audit. Below is the report. I focused on the src/data_processing/ layer (the project has no src/data/; the data layer lives there) plus its config integration.
+________________________________________
+🚀 TruthLens src/data_processing/ Audit (v3)
+Scope: 17 files / 2,686 LOC. Cross-checked against config/data_config.yaml, config/config.yaml, src/config/*, src/training/create_trainer_fn.py, tests/test_data_pipeline_module.py, and main.py.
+________________________________________
+🔴 1. CRITICAL DATA BUGS
+CRIT-D1 — clean_for_task re-defines task→label columns, drifts from contracts
+•	File: src/data_processing/data_cleaning.py:169-176
+•	Function: clean_for_task
+•	Issue: A hardcoded TASK_LABELS = {"bias": ["bias_label"], "frame": ["CO","EC","HI","MO","RE"], "emotion": [f"emotion_{i}" for i in range(20)], …} lives next to the canonical CONTRACTS table in data_contracts.py.
+•	Why it breaks: Adding/renaming a label column in data_contracts.CONTRACTS (e.g. extending emotion to 21 labels, renaming RE→resolution) silently desynchronises cleaning from validation/factory/sampler. cfg.fill_missing_labels=True would then fill the wrong columns.
+•	Exact fix:
+from src.data_processing.data_contracts import get_contract
+def clean_for_task(df, task, *, config=None):
+    cfg = config or DataCleaningConfig()
+    contract = get_contract(task)        # single source of truth
+    return clean_dataframe(df, config=cfg, label_cols=list(contract.label_columns))
+CRIT-D2 — File fingerprint collides for files between 1 MB and 2 MB
+•	File: src/data_processing/data_cache.py:58-72
+•	Function: _file_fingerprint
+•	Issue: When 1<<20 < size <= 2<<20 only the first 1 MB is hashed (the if size > (2<<20) branch never fires). Two files of identical size + identical first 1 MB but different tail → identical fingerprint → stale cache served.
+•	Why it breaks: Most TruthLens raw splits are 1–10 MB CSVs; the medium-file blind-spot is exactly the typical val/test size band.
+•	Exact fix:
+size = path.stat().st_size
+h = hashlib.sha256()
+with open(path, "rb") as f:
+    if size <= (2 << 20):
+        h.update(f.read())               # small file → hash everything
+    else:
+        h.update(f.read(1 << 20))        # head
+        f.seek(-(1 << 20), 2)
+        h.update(f.read())               # tail
+return {"size": size, "sha": h.hexdigest()}
+CRIT-D3 — data_loader.load_dataframe ignores usecols for parquet/JSON
+•	File: src/data_processing/data_loader.py:84-91
+•	Issue: usecols=... is plumbed through load_dataframe but only forwarded to load_csv. Parquet and JSON ignore it. A 6-column raw narrative parquet that only needs text + hero/villain/victim still pulls every column into memory (incl. *_entities text blobs).
+•	Why it breaks: silent ~3-5× memory usage for narrative + 5-10× for emotion (20 label cols).
+•	Exact fix:
+def load_parquet(path, *, usecols=None):
+    return pd.read_parquet(path, columns=usecols)
+def load_json(path, *, usecols=None):
+    df = pd.read_json(path, lines=True)
+    return df[usecols] if usecols else df
+…and forward usecols from load_dataframe.
+CRIT-D4 — load_json only handles JSONL, not standard JSON arrays
+•	File: src/data_processing/data_loader.py:58-59
+•	Issue: Hardcoded lines=True will raise ValueError: Trailing data on a normal JSON-array file with .json suffix.
+•	Fix: sniff one byte:
+def load_json(path):
+    with open(path, "rb") as f:
+        first = f.read(1)
+    return pd.read_json(path, lines=(first != b"["))
+CRIT-D5 — Augmentation runs after leakage check; augmented rows skip dup detection
+•	File: src/data_processing/data_pipeline.py:166-178
+•	Issue: Pipeline order is leakage_check(raw) → augment(train). synonym_replacement / random_swap can mutate a train row into a near-duplicate of a val/test row, but no second pass is run.
+•	Fix: re-run a cheap exact-match leakage check on (augmented_train ∪ val ∪ test) after augment_dataset, OR pre-filter augmentation outputs against val/test hash sets (preferred — augmentation rejects the candidate and resamples).
+CRIT-D6 — propaganda_injection / bias_injection augmentations corrupt labels
+•	File: src/data_processing/data_augmentation.py:141-154 + TASK_OPS 192-199
+•	Issue: TASK_OPS["propaganda"] = [propaganda_injection] and bias_injection blindly prepend "Clearly, …" / append "Obviously biased." to a row without considering the label. Applied to a propaganda_label=0 row, the augmented text contains a propaganda marker, but inherits label 0. This is label-corrupted training data — it actively teaches the model to ignore the marker.
+•	Fix: gate label-coupled ops on the row's label:
+def propaganda_injection(text, rng, label=None):
+    if label != 1:               # only augment positives
+        return text
+    return f"Clearly, {text}"
+…and thread row[label_col] through augment_text → op(text, rng, label=…). Same treatment for bias_injection. For multilabel tasks (emotion_amplify), check the relevant label column too.
+CRIT-D7 — Augmentation samples uniformly, worsening class imbalance
+•	File: src/data_processing/data_augmentation.py:244-254
+•	Issue: rng.choice(records) is uniform over the input — so a 95/5 dataset stays 95/5 after augmentation (just bigger). The whole point of balancing.method: oversample in data_config.yaml is defeated.
+•	Fix: stratified sampling by label (classification) or rarest-positive label (multilabel), or weight rng.choices(records, weights=inv_freq).
+________________________________________
+🟠 2. PERFORMANCE BOTTLENECKS
+PERF-D1 — clean_dataframe runs Python .map(lambda x: _clean_text(x, cfg))
+•	Location: src/data_processing/data_cleaning.py:107
+•	Bottleneck: Python-level loop over all rows; _clean_text does 4 sequential regex compiles (already module-level — good) but is invoked per row.
+•	Fix: chained .str ops:
+s = df["text"].astype(str)
+if cfg.strip_html: s = s.str.replace(HTML_RE, " ", regex=True)
+if cfg.strip_urls: s = s.str.replace(URL_RE, " ", regex=True)
+if cfg.normalize_whitespace: s = s.str.replace(WS_RE, " ", regex=True)
+if cfg.lowercase: s = s.str.lower()
+df["text"] = s.str.strip()
+•	Expected speedup: ~5-10× on 100k-row CSV (vectorized C path).
+PERF-D2 — BaseTextDataset stores input_ids as Python List[List[int]]
+•	Location: src/data_processing/dataset.py:86-90
+•	Bottleneck: ~25M Python ints for a 100k × 256 corpus = ~200 MB pure Python overhead + GC pressure + worker fork-copy storm.
+•	Fix: flatten to two arrays (offsets + ids):
+ids_flat = np.concatenate([np.asarray(x, dtype=np.int32) for x in enc["input_ids"]])
+offsets  = np.cumsum([0] + [len(x) for x in enc["input_ids"]], dtype=np.int64)
+self._ids_flat, self._offsets = ids_flat, offsets
+def _encoded_inputs(self, idx):
+    s, e = self._offsets[idx], self._offsets[idx+1]
+    return {"input_ids": torch.from_numpy(self._ids_flat[s:e]).long(), …}
+•	Expected speedup: ~3-5× lower RSS, ~30 % faster __getitem__ (avoids Python list iteration), and removes worker-fork bloat.
+PERF-D3 — check_near_duplicates is O(n·m) SequenceMatcher
+•	Location: src/data_processing/leakage_checker.py:136-151
+•	Bottleneck: for two 10k-row splits, ~10⁸ comparisons.
+•	Fix: MinHash + LSH (datasketch.MinHashLSH), or at minimum hash to k-shingles and use Jaccard on the bucketed candidates. Alternatively fail-fast if either split exceeds N rows.
+•	Expected speedup: 100-1000× for 10k-row splits.
+PERF-D4 — compute_md5 is unused but kept as default option
+•	Location: src/data_processing/data_loader.py:27-32
+•	Replace with the same SHA-256 head+tail fingerprint already used by the cache (and avoid the second full-file pass when both are needed).
+________________________________________
+🟡 3. TOKEN ALIGNMENT ISSUES
+TOK-D1 — offset_mapping works correctly end-to-end ✅
+Traced tokenizer(...) → BaseTextDataset._offset_mapping → _encoded_inputs → collate._collate (pad value 0). Padded shape [B, max_len, 2] is correct; downstream consumers can map back to char offsets. Fast-tokenizer guard at dataset.py:70-74 is correct.
+TOK-D2 — Truncation diagnostics counted wrong when enc["length"] is unavailable
+•	Location: src/data_processing/dataset.py:94-96
+•	enc.get("length") returns None for some tokenizer paths; the fallback [len(x) for x in self._input_ids] is OK, but the check L >= max_length over-counts: any sample whose tokenized length equals max_length is flagged as truncated even when it would have fit exactly. Use > max_length against the un-truncated length (request return_length=True then ALSO request padding=False + a separate length probe), or use HF's enc.encodings[i].overflowing which is the canonical signal.
+•	Fix:
+if hasattr(enc, "encodings") and enc.encodings is not None:
+    n_truncated = sum(1 for e in enc.encodings if e.overflowing)
+TOK-D3 — Raw text ≠ stored text for offset alignment
+•	Location: dataset.py:68 tokenizes df[text_col] after clean_for_task has rewritten it (URL strip / HTML strip / whitespace normalize). Offsets returned by the tokenizer therefore index into the cleaned string, not the original. If any explainability layer downstream tries to highlight back into the raw article, the spans will be off.
+•	Fix: if explanation-on-raw-text is required, store the raw text alongside cleaned text and pass an alignment table through (or skip cleaning for offset-bearing rows).
+________________________________________
+🧠 4. DATA LEAKAGE RISKS
+LEAK-D1 — Augmentation bypasses leakage check (see CRIT-D5)
+Already covered — listed here for the section.
+LEAK-D2 — Train/val/test split assumed to come from disk; no in-pipeline split exists
+•	config/data_config.yaml declares split.train_ratio / val_ratio / test_ratio / stratified: true, but no Python code in src/data_processing/ ever splits. Splits are read as separate files in _build_raw_datasets. If the upstream split was non-stratified or label-leaking, the pipeline can't catch it.
+•	Fix: either (a) delete the dead split: block from YAML, or (b) implement src/data_processing/data_splitter.py and call it before validate_dataframe when only a single file exists.
+LEAK-D3 — _normalize lowercases pre-hash; but clean_dataframe.drop_duplicates(subset=["text"]) is case-sensitive
+•	Location: leakage_checker.py:52-67 vs data_cleaning.py:125
+•	Two articles "Foo" and "foo" both survive cleaning, then trigger a leakage hit across splits because hashing lowercases. False-positive leakage, abort with strict=True (default).
+•	Fix: make both consistent — either lowercase in drop_duplicates (df.drop_duplicates(subset=df["text"].str.lower())) or remove lower() from _normalize. The first is correct (more aggressive dedup wins).
+________________________________________
+🚀 5. GPU / DATALOADER ISSUES
+GPU-D1 — pin_memory correctly gated on CUDA ✅
+DataLoaderConfig.resolved_pin_memory() returns False on CPU-only hosts (Replit dev). Verified.
+GPU-D2 — persistent_workers / prefetch_factor correctly skipped when num_workers=0 ✅
+dataloader_factory.py:103-105 guard.
+GPU-D3 — non_blocking=True is never set downstream
+•	The collate produces CPU tensors; whoever moves them to CUDA must use tensor.to(device, non_blocking=True). Verify the trainer step does this — if it uses tensor.to(device) (blocking), pin_memory=True gives no speedup. Action: grep src/training/training_step.py (out of this audit's scope) and add non_blocking=True for pin_memory=True to be useful.
+GPU-D4 — batch_size=16 is small for a 768-hidden RoBERTa on modern GPUs
+•	DataLoaderConfig.batch_size: int = 16 (dataloader_factory.py:41) and config.yaml::data.batch_size: 16 agree but are not connected (see CFG-D1). 16 underutilises an A10/A100; bump to 32-64 with grad-accum.
+GPU-D5 — Worker count auto-default caps at 4
+•	_default_num_workers() returns min(4, cpu//2). On a 16-vCPU box you get 4 workers → CPU-side preprocessing can starve a fast GPU. The right ceiling is min(8, cpu) for tokenized-once datasets (workers do almost nothing — just batched tensor stack), or pass through config.data.num_workers.
+________________________________________
+💾 6. CACHING ISSUES
+CACHE-D1 — Medium-file fingerprint collision (see CRIT-D2)
+CACHE-D2 — CACHE_VERSION = "v3" is manually maintained
+•	data_cache.py:29 is a string constant. Bumping it is a human action; recent changes to _to_plain / _cache_extra did not bump it. Two competing cache schemas can coexist on disk.
+•	Fix: derive automatically:
+import hashlib, inspect
+CACHE_VERSION = "v" + hashlib.md5(
+    (inspect.getsource(_file_fingerprint) +
+     inspect.getsource(get_cache_key)).encode()
+).hexdigest()[:8]
+…or at minimum bump the literal in this PR (v3 → v4) once the fingerprint fix lands.
+CACHE-D3 — Cache key correctly includes tokenizer + cleaning + augmentation + max_length ✅
+Verified data_pipeline._cache_extra(...) → get_cache_key(...) (data_pipeline.py:107-124, data_cache.py:88-106).
+CACHE-D4 — No on-disk cache eviction / pruner
+•	_get_cache_dir() writes {cache_key}/{task}__{split}.parquet indefinitely. No max-age or max-bytes cap. Mirror what src/features/cache/cache_manager.prune_all does for the feature cache (audit fix #1.5 from earlier rounds) and call it on startup.
+CACHE-D5 — Save is non-atomic
+•	save_cached_datasets writes per-frame parquet then meta.json. A crash mid-write leaves a partially populated dir that load_cached_datasets cheerfully reads (it doesn't validate meta.json exists before returning). Add: write to {cache_key}.tmp/ then atomic rename → {cache_key}/, and require meta.json present at load time.
+________________________________________
+⚙️ 7. CONFIG ISSUES
+CFG-D1 — config.yaml::data.{batch_size,num_workers,pin_memory,shuffle} is not wired into DataLoaderConfig
+•	data_pipeline.run_data_pipeline accepts a dataloader_config kwarg, but nothing in the codebase passes a DataLoaderConfig constructed from config.yaml. The DataLoaderConfig defaults silently win. Wire DataLoaderConfig(**load_config()["data"]) at the call site (main.py / create_trainer_fn.py).
+CFG-D2 — data_config.yaml::unified_schema is completely unused
+•	dataset.label_fields, text_fields, emotion_prefix — none of this is read by Python. The contracts table in data_contracts.py is what is actually used. Either:
+o	Delete the unified_schema: block from data_config.yaml, or
+o	Build CONTRACTS from it at import time so the YAML is the source of truth.
+CFG-D3 — data_config.yaml::cleaning contradicts DataCleaningConfig defaults
+•	YAML: lowercase: true, normalize_unicode: true, remove_emojis: true, expand_contractions: true.
+•	Code: DataCleaningConfig.lowercase: bool = False; no normalize_unicode/remove_emojis/expand_contractions fields exist.
+•	The YAML is never read. Behaviour is dictated entirely by the dataclass defaults. Real config drift. Either implement those four cleaning ops + load from YAML, or delete the YAML keys.
+CFG-D4 — data_config.yaml::augmentation.techniques.{synonym_replacement,random_swap,random_deletion,back_translation} are unused
+•	AugmentationConfig has no per-technique toggles. TASK_OPS is hard-wired in data_augmentation.py:192-199. Either add toggles or delete the YAML block.
+CFG-D5 — data_config.yaml::balancing is unused
+•	The samplers module uses WeightedRandomSampler (in-batch reweighting), NOT SMOTE/oversample/undersample. The block claims otherwise. Delete or implement.
+CFG-D6 — max_length: int = 512 lives in three places
+•	DataPipelineConfig.max_length=512
+•	DatasetBuildConfig.max_length=512 (unused dataclass — see UNUSED-D1)
+•	build_dataset(max_length=512) parameter default
+•	build_all_datasets(max_length=512) parameter default
+•	Fix: single constant DEFAULT_MAX_LENGTH = 512 in data_contracts.py (or read from config.yaml), reference it everywhere.
+CFG-D7 — data_config.yaml::profiling.report_dir / output.processed_data_dir / splits_dir / logs_dir / save_formats are not read
+•	data_profiler.profile_dataframe ignores report_dir; nothing writes to data/processed/unified_dataset.csv; no parquet save outside the cache. Delete or implement.
+CFG-D8 — eda: block (top_words, max_tfidf_features, ngrams, plots) is fully orphaned
+•	No EDA code in src/data_processing/. Block belongs in a separate notebook config or should be deleted.
+________________________________________
+🧹 8. UNUSED DATA FILES / CODE
+File / Symbol	Status	Impact	Fix
+data_loader.compute_md5	UNUSED (only callable via compute_hash=True, which no caller passes)	dead import path	delete or wire into _file_fingerprint for files ≤ 2 MB after CRIT-D2 fix
+data_loader.load_csv_in_chunks	UNUSED	none	keep if data_pipeline will adopt it for >1 GB CSVs; otherwise delete
+dataset_factory.DatasetBuildConfig	DECLARED, NEVER INSTANTIATED	confusion (looks like the canonical config but isn't)	wire it into build_dataset (replace the loose kwargs) or delete it
+collate.collate_fn and collate.fast_collate_fn	LEGACY back-compat (default pad_id=0)	foot-gun for RoBERTa users (pad_id=1)	mark DeprecationWarning and remove once callers migrate
+data_resolver.pretty_print_config	DEBUG ONLY (uses print, not logger)	minor	move to a __main__ block or delete
+class_balance.ClassBalanceConfig	only imbalance_threshold is read; compute_weights/normalize_weights defaults are never overridden	low	OK to keep
+________________________________________
+🧪 9. EDGE CASE FAILURES
+Edge case	Behaviour today	Verdict
+Empty text after cleaning	clean_dataframe drops rows with len < min_text_len=3 ✅	OK
+Extremely long text (> 20k chars)	clean_dataframe drops rows with len > 20000 ✅	OK, but silent — log how many rows dropped
+batch_size=1	_collate works (single-item pad sequence is identity) ✅	OK
+Missing labels	validate_dataframe flags NaN, dataset.ClassificationDataset.__init__ re-raises on NaN (line 152-155) ✅	OK
+Non-binary multilabel value (e.g. 0.5)	_validate_multilabel flags it; MultiLabelDataset casts to np.float32 and stores anyway	Inconsistent — validator complains in strict mode but dataset would happily store fractional labels for BCE loss. Decide: (a) fail at validator OR (b) explicitly support soft labels
+Unicode / multilingual text	No normalisation; data_cleaning doesn't NFC/NFKC even though YAML claims normalize_unicode: true	Bug — see CFG-D3. Add unicodedata.normalize("NFKC", t)
+frame task with frame: frame flat label column instead of CO/EC/HI/MO/RE	Validator misses (only checks the 5 split columns); dataset factory raises Missing multilabel columns ['CO', …]	OK — clear error, not silent corruption
+narrative rows with NaN entity columns	narrative optional_columns are tolerated by validator/dataset (entity cols not used as labels)	OK
+Worker fork on macOS spawn	persistent_workers=True + un-tokenized lambdas — build_collate_fn returns partial(_collate, ...) which is picklable ✅	OK
+________________________________________
+✅ 10. VERIFIED COMPONENTS
+•	Schema vs user-supplied 6-task spec — all six contracts (bias 0/1, ideology 0/1/2, propaganda 0/1, frame {CO,EC,HI,MO,RE}∈{0,1}, narrative {hero,villain,victim}∈{0,1} + entity text optional, emotion {emotion_0…emotion_19}∈{0,1}) match the user's specification exactly. data_contracts.CONTRACTS is the single source of truth.
+•	BaseTextDataset pre-tokenizes once in __init__; __getitem__ is O(1).
+•	dataloader_factory correctly disables pin_memory on CPU, gates persistent_workers/prefetch_factor on num_workers > 0, and threads the tokenizer's pad_token_id through build_collate_fn (RoBERTa-safe).
+•	samplers.build_sampler is contract-driven and uses WeightedRandomSampler with Laplace-smoothed weights for multilabel (no 1e6 blowup on zero-positive cols).
+•	Leakage check is run after cleaning and before caching → no poisoned cache (modulo CRIT-D5 augmentation timing).
+•	data_validator.TASK_SCHEMAS is derived from CONTRACTS (correct anti-drift design).
+•	data_pipeline._cache_extra correctly captures tokenizer name + class + vocab_size + max_length + cleaning/augmentation configs in the cache key.
+________________________________________
+📉 11. FINAL SCORE
+Score: 7.0 / 10
+Why not 10:
+•	Two real correctness bugs in augmentation that produce label-noise / class-imbalance amplification (CRIT-D6, CRIT-D7).
+•	One real cache-collision bug for medium files (CRIT-D2).
+•	Drift between data_cleaning.TASK_LABELS and data_contracts.CONTRACTS (CRIT-D1).
+•	One leakage hole: augmentation runs after the leakage check (CRIT-D5).
+•	Six dead config blocks in data_config.yaml (CFG-D2..D5, D7, D8).
+•	Performance: clean_dataframe is a Python loop (PERF-D1); BaseTextDataset stores List[List[int]] (PERF-D2).
+•	load_dataframe ignores usecols for parquet/JSON and assumes JSONL (CRIT-D3, CRIT-D4).
+Steps to reach ≥ 9.5:
+1.	CRIT-D1 — replace data_cleaning.TASK_LABELS with get_contract(task).label_columns.
+2.	CRIT-D2 — fix _file_fingerprint to hash the full file when size <= 2 MB; bump CACHE_VERSION to "v4".
+3.	CRIT-D3 + CRIT-D4 — forward usecols to parquet/JSON loaders; sniff JSON-array vs JSONL.
+4.	CRIT-D5 — re-run exact-match leakage check on (augmented_train ∪ val ∪ test) after augmentation, OR pre-filter augmentation output against val/test hash sets.
+5.	CRIT-D6 — make propaganda_injection / bias_injection / emotion_amplify label-aware; only augment positives.
+6.	CRIT-D7 — stratified sampling in augment_dataset (weight by inverse class frequency).
+7.	PERF-D1 — vectorize cleaning with df["text"].str.replace(...) chain. ~5-10× speedup on 100k rows.
+8.	PERF-D2 — flatten _input_ids to (ids_flat, offsets) numpy arrays. ~3-5× lower RSS, ~30 % faster __getitem__, removes worker-fork bloat.
+9.	CFG-D1 — wire config.yaml::data.* into DataLoaderConfig at the trainer entry point.
+10.	CFG-D2..D5, D7, D8 — delete the orphaned YAML blocks (or implement them — most should be deleted; only cleaning.normalize_unicode/remove_emojis/expand_contractions are worth implementing).
+11.	CFG-D6 — single DEFAULT_MAX_LENGTH = 512 constant in data_contracts.py, reference everywhere.
+12.	TOK-D2 — use enc.encodings[i].overflowing for accurate truncation count.
+

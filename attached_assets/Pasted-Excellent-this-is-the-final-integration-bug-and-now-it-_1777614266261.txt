@@ -1,0 +1,220 @@
+Excellent — this is the **final integration bug**, and now it’s very clear.
+
+---
+
+# 🚨 Root Cause (Final)
+
+From your latest logs:
+
+```text id="f8qtfb"
+KeyError: 'logits'
+```
+
+📌 Source: 
+
+---
+
+# 🧠 What’s actually wrong
+
+Your evaluation code expects:
+
+```python
+out["logits"]
+```
+
+👉 But your model returns something like:
+
+```python
+{
+    "bias_logits": ...,
+    "emotion_logits": ...,
+    "propaganda_logits": ...,
+    ...
+}
+```
+
+👉 So:
+
+> ❌ `"logits"` key does NOT exist
+> ✅ You have **task-specific logits**
+
+---
+
+# 🔍 Why this happens
+
+Your system is:
+
+* ✔ Multi-task model
+* ✔ Multiple heads (bias, emotion, ideology…)
+
+But your evaluation pipeline is written like:
+
+> ❌ Single-task HuggingFace-style model
+
+---
+
+# ⚠️ Mismatch
+
+| Model Output     | Evaluation Expectation |
+| ---------------- | ---------------------- |
+| `bias_logits`    | `logits` ❌             |
+| `emotion_logits` | `logits` ❌             |
+
+---
+
+# ✅ Fix (MANDATORY)
+
+Go to:
+
+```text
+src/evaluation/prediction_collector.py
+```
+
+---
+
+## 🔧 Replace THIS:
+
+```python
+logits = out["logits"]
+```
+
+---
+
+## ✅ With THIS:
+
+```python
+logits = out[f"{task}_logits"]
+```
+
+---
+
+## 💡 Full safe version:
+
+```python
+key = f"{task}_logits"
+
+if key not in out:
+    raise KeyError(f"Missing {key} in model output. Available: {list(out.keys())}")
+
+logits = out[key].detach().cpu().numpy()
+```
+
+---
+
+# 🔥 Why this fixes everything
+
+Because your loop already does:
+
+```python
+for task in tasks:
+```
+
+👉 So you must dynamically fetch:
+
+```python
+bias_logits
+emotion_logits
+propaganda_logits
+...
+```
+
+---
+
+# 🧪 After Fix — Expected Output
+
+You should see:
+
+```text
+[COLLECT] task=bias samples=3
+[COLLECT] task=emotion samples=3
+[COLLECT] task=propaganda samples=3
+...
+Evaluation pipeline SUCCESS
+```
+
+And finally:
+
+```json
+"metrics": {
+  "score": 0.6,
+  "confidence": 0.7,
+  "probabilities": [...]
+}
+```
+
+---
+
+# ⚠️ Why metrics still 0.0 now
+
+Because:
+
+```text
+Batch evaluation failed
+```
+
+👉 So pipeline falls back → dummy metrics
+
+---
+
+# 📊 Final System State (after this fix)
+
+| Component            | Status       |
+| -------------------- | ------------ |
+| Model                | ✅            |
+| GPU                  | ✅            |
+| Predictions          | ✅            |
+| Labels               | ✅            |
+| Evaluation trigger   | ✅            |
+| Evaluation execution | ❌ (THIS BUG) |
+| Metrics              | ❌            |
+
+---
+
+# 🚀 You are HERE
+
+You’ve reached:
+
+> 🔥 **Last blocking bug before full system completion**
+
+---
+
+# 💡 Bonus (make it future-proof)
+
+Instead of hardcoding:
+
+```python
+out[f"{task}_logits"]
+```
+
+Do:
+
+```python
+logits = next(
+    (v for k, v in out.items() if k.endswith("_logits") and k.startswith(task)),
+    None
+)
+
+if logits is None:
+    raise KeyError(f"No logits found for task {task}")
+```
+
+---
+
+# 🎯 Final Answer
+
+* ❌ Evaluation expects `"logits"`
+* ❌ Your model gives `"task_logits"`
+* ✅ Fix key mapping
+* 👉 Then evaluation will FINALLY work
+
+---
+
+# If you want next step
+
+After this fix, I can help you:
+
+* validate metric correctness (F1, accuracy per task)
+* calibrate final scoring
+* prepare full demo-ready output
+
+You’re literally **one fix away** now.

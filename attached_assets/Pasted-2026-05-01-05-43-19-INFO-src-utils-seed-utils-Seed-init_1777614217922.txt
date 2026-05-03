@@ -1,0 +1,104 @@
+2026-05-01 05:43:19 | INFO | src.utils.seed_utils | Seed initialized | base=42 | rank=0 | final=42 | deterministic=False
+2026-05-01 05:43:19 | INFO | __main__ |  TruthLens System Started | mode=infer
+`resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
+2026-05-01 05:43:19 | INFO | __main__ | 🧪 Running FULL TruthLens pipeline
+2026-05-01 05:43:19 | INFO | src.utils.settings | Loaded settings from /teamspace/studios/this_studio/Truthlens-Ai/config/config.yaml
+2026-05-01 05:43:19 | INFO | __main__ |  Found checkpoint at /teamspace/studios/this_studio/Truthlens-Ai/saved_models/checkpoint.pt — loading Predictor
+2026-05-01 05:43:20 | INFO | src.utils.device_utils | Using CUDA device
+2026-05-01 05:43:21 | INFO | src.models.inference.predictor | Predictor initialized on cuda
+2026-05-01 05:43:21 | INFO | __main__ |  Predictor attached
+2026-05-01 05:43:21 | INFO | src.analysis.spacy_loader | [spaCy] Loading | model=en_core_web_sm | disable=()
+2026-05-01 05:43:21 | INFO | src.analysis.preprocessing | PreprocessingPipeline initialized
+2026-05-01 05:43:21 | INFO | src.aggregation.feature_mapper | [FeatureMapper] init | strict=False normalize=False calibrated=False
+2026-05-01 05:43:21 | INFO | src.aggregation.weight_manager | [WeightManager] Initialized | version=v2 frozen=False
+2026-05-01 05:43:21 | INFO | src.utils.config_loader | Loaded config | tasks=6
+2026-05-01 05:43:21 | INFO | src.aggregation.aggregation_pipeline | [AggregationPipeline] Initialized
+2026-05-01 05:43:21 | INFO | src.graph.graph_config | GraphConfigLoader initialized
+2026-05-01 05:43:21 | INFO | src.graph.graph_config | GraphConfig loaded
+2026-05-01 05:43:21 | INFO | src.graph.narrative_graph_builder | NarrativeGraphBuilder initialized (spacy=yes)
+2026-05-01 05:43:21 | INFO | src.graph.temporal_graph | TemporalGraphAnalyzer initialized
+2026-05-01 05:43:21 | INFO | src.graph.graph_analysis | GraphAnalyzer initialized
+2026-05-01 05:43:21 | INFO | src.graph.narrative_graph_builder | NarrativeGraphBuilder initialized (spacy=yes)
+2026-05-01 05:43:21 | INFO | src.graph.graph_analysis | GraphAnalyzer initialized
+2026-05-01 05:43:21 | INFO | src.graph.graph_features | GraphFeatureExtractor initialized
+2026-05-01 05:43:21 | INFO | src.graph.temporal_graph | TemporalGraphAnalyzer initialized
+2026-05-01 05:43:21 | INFO | src.graph.graph_explainer | GraphExplainer initialized (weights node=0.40 edge=0.30 temporal=0.30)
+2026-05-01 05:43:21 | INFO | src.analysis.framing_analysis | FramingAnalyzer initialized (final)
+2026-05-01 05:43:21 | INFO | src.analysis.ideological_language_detector | IdeologicalLanguageDetector initialized (final)
+2026-05-01 05:43:21 | INFO | src.analysis.information_density_analyzer | InformationDensityAnalyzer initialized (final)
+2026-05-01 05:43:21 | INFO | src.analysis.information_omission_detector | InformationOmissionDetector initialized (final)
+2026-05-01 05:43:21 | INFO | src.analysis.spacy_loader | [spaCy] Loading | model=en_core_web_sm | disable=('parser',)
+2026-05-01 05:43:22 | INFO | src.analysis.emotion_target_analysis | EmotionTargetAnalyzer initialized
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_conflict | NarrativeConflictAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_propagation | NarrativePropagationAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_role_extractor | NarrativeRoleExtractor initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_temporal_analyzer | NarrativeTemporalAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.rhetorical_device_detector | RhetoricalDeviceDetector initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.source_attribution_analyzer | SourceAttributionAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.integration_runner | AnalysisIntegrationRunner initialized | analyzers=15
+2026-05-01 05:43:22 | INFO | src.graph.graph_pipeline | GraphPipeline initialized
+2026-05-01 05:43:22 | INFO | src.pipelines.truthlens_pipeline | TruthLensPipeline: evaluation enabled — call analyze_batch(texts, labels=...) or evaluate(texts, labels) to actually run it. Per-article analyse() will not invoke the evaluator (it is dataset-level).
+2026-05-01 05:43:22 | INFO | src.analysis.rhetorical_device_detector | RhetoricalDeviceDetector initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.emotion_target_analysis | EmotionTargetAnalyzer initialized
+2026-05-01 05:43:22 | INFO | src.analysis.framing_analysis | FramingAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.information_density_analyzer | InformationDensityAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.information_omission_detector | InformationOmissionDetector initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.ideological_language_detector | IdeologicalLanguageDetector initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_role_extractor | NarrativeRoleExtractor initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_conflict | NarrativeConflictAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_propagation | NarrativePropagationAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.narrative_temporal_analyzer | NarrativeTemporalAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.source_attribution_analyzer | SourceAttributionAnalyzer initialized (final)
+2026-05-01 05:43:22 | INFO | src.analysis.analysis_pipeline | AnalysisPipeline initialized | analyzers=14 | mode=safe
+2026-05-01 05:43:22 | INFO | src.analysis.bias_profile_builder | BiasProfileBuilder initialized
+2026-05-01 05:43:22 | INFO | src.analysis.orchestrator | AnalysisOrchestrator initialized (final)
+2026-05-01 05:43:22 | INFO | src.pipelines.truthlens_pipeline | TruthLensPipeline initialized (parallel_stages=True, max_text_length=100000, max_seq_length=512)
+2026-05-01 05:43:22 | INFO | __main__ |  Labels loaded from data/test_labels.json
+2026-05-01 05:43:22 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:22 | WARNING | src.analysis.emotion_target_analysis | EmotionTarget: doc.vocab does not match PhraseMatcher vocab; falling back to token-only matching for this doc
+2026-05-01 05:43:22 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:22 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:22 | WARNING | truthlens.monitoring | feature_anomaly_detected
+2026-05-01 05:43:22 | INFO | truthlens.monitoring | feature_summary
+2026-05-01 05:43:22 | INFO | src.analysis.spacy_loader | [spaCy] Loading | model=en_core_web_sm | disable=('ner',)
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:23 | WARNING | src.analysis.emotion_target_analysis | EmotionTarget: doc.vocab does not match PhraseMatcher vocab; falling back to token-only matching for this doc
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:23 | WARNING | truthlens.monitoring | feature_anomaly_detected
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | feature_summary
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:23 | WARNING | src.analysis.emotion_target_analysis | EmotionTarget: doc.vocab does not match PhraseMatcher vocab; falling back to token-only matching for this doc
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | timing
+2026-05-01 05:43:23 | WARNING | truthlens.monitoring | feature_anomaly_detected
+2026-05-01 05:43:23 | INFO | truthlens.monitoring | feature_summary
+2026-05-01 05:43:23 | INFO | src.evaluation.evaluation_pipeline | [PIPELINE] Collecting predictions for 6 tasks
+2026-05-01 05:43:23 | INFO | src.evaluation.prediction_collector | [COLLECT] multi-task start (6 tasks, fallback per-task)
+2026-05-01 05:43:23 | INFO | src.evaluation.prediction_collector | [COLLECT] task=bias samples=3
+2026-05-01 05:43:23 | WARNING | src.pipelines.truthlens_pipeline | Batch evaluation failed
+Traceback (most recent call last):
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/pipelines/truthlens_pipeline.py", line 573, in analyze_batch
+    evaluation = run_evaluation_pipeline(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/evaluation/evaluation_pipeline.py", line 200, in run_evaluation_pipeline
+    predictions = collect_all_tasks(
+                  ^^^^^^^^^^^^^^^^^^
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/evaluation/prediction_collector.py", line 209, in collect_all_tasks
+    results[task] = collect_predictions(
+                    ^^^^^^^^^^^^^^^^^^^^
+  File "/teamspace/studios/this_studio/Truthlens-Ai/src/evaluation/prediction_collector.py", line 156, in collect_predictions
+    logits = out["logits"].detach().cpu().numpy()
+             ~~~^^^^^^^^^^
+KeyError: 'logits'
+2026-05-01 05:43:23 | INFO | __main__ |  BATCH SUMMARY: n=3 total_time=1.441s model_version=roberta-base
+2026-05-01 05:43:23 | INFO | __main__ |  RESULT 1:
+2026-05-01 05:43:23 | INFO | __main__ |   scores: {'tasks': {'metrics': {'score': 0.0, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph': {'score': 0.7355919139385062, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph_explanation': {'score': 0.4999999999996, 'confidence': None, 'probabilities': None, 'entropy': None}}, 'manipulation_risk': 0.0, 'credibility_score': 0.2574571698782197, 'final_score': 0.6287285849384812, 'uncertainty_summary': None}
+2026-05-01 05:43:23 | INFO | __main__ |   predictions keys: ['emotion_logits', 'emotion_probabilities', 'emotion_predictions', 'emotion_confidence', 'emotion_entropy', 'emotion', 'narrative_logits', 'narrative_probabilities', 'narrative_predictions', 'narrative_confidence', 'narrative_entropy', 'narrative', 'propaganda_logits', 'propaganda_probabilities', 'propaganda_predictions', 'propaganda_confidence', 'propaganda_entropy', 'propaganda', 'bias_logits', 'bias_probabilities', 'bias_predictions', 'bias_confidence', 'bias_entropy', 'bias', 'ideology_logits', 'ideology_probabilities', 'ideology_predictions', 'ideology_confidence', 'ideology_entropy', 'ideology', 'narrative_frame_logits', 'narrative_frame_probabilities', 'narrative_frame_predictions', 'narrative_frame_confidence', 'narrative_frame_entropy', 'narrative_frame', 'task_logits']
+2026-05-01 05:43:23 | INFO | __main__ |  RESULT 2:
+2026-05-01 05:43:23 | INFO | __main__ |   scores: {'tasks': {'metrics': {'score': 0.0, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph': {'score': 0.7355919139385062, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph_explanation': {'score': 0.4999999999996, 'confidence': None, 'probabilities': None, 'entropy': None}}, 'manipulation_risk': 0.0, 'credibility_score': 0.2574571698782197, 'final_score': 0.6287285849384812, 'uncertainty_summary': None}
+2026-05-01 05:43:23 | INFO | __main__ |   predictions keys: ['emotion_logits', 'emotion_probabilities', 'emotion_predictions', 'emotion_confidence', 'emotion_entropy', 'emotion', 'narrative_logits', 'narrative_probabilities', 'narrative_predictions', 'narrative_confidence', 'narrative_entropy', 'narrative', 'propaganda_logits', 'propaganda_probabilities', 'propaganda_predictions', 'propaganda_confidence', 'propaganda_entropy', 'propaganda', 'bias_logits', 'bias_probabilities', 'bias_predictions', 'bias_confidence', 'bias_entropy', 'bias', 'ideology_logits', 'ideology_probabilities', 'ideology_predictions', 'ideology_confidence', 'ideology_entropy', 'ideology', 'narrative_frame_logits', 'narrative_frame_probabilities', 'narrative_frame_predictions', 'narrative_frame_confidence', 'narrative_frame_entropy', 'narrative_frame', 'task_logits']
+2026-05-01 05:43:23 | INFO | __main__ |  RESULT 3:
+2026-05-01 05:43:23 | INFO | __main__ |   scores: {'tasks': {'metrics': {'score': 0.0, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph': {'score': 0.7355919139385062, 'confidence': None, 'probabilities': None, 'entropy': None}, 'graph_explanation': {'score': 0.4999999999996, 'confidence': None, 'probabilities': None, 'entropy': None}}, 'manipulation_risk': 0.0, 'credibility_score': 0.2574571698782197, 'final_score': 0.6287285849384812, 'uncertainty_summary': None}
+2026-05-01 05:43:23 | INFO | __main__ |   predictions keys: ['emotion_logits', 'emotion_probabilities', 'emotion_predictions', 'emotion_confidence', 'emotion_entropy', 'emotion', 'narrative_logits', 'narrative_probabilities', 'narrative_predictions', 'narrative_confidence', 'narrative_entropy', 'narrative', 'propaganda_logits', 'propaganda_probabilities', 'propaganda_predictions', 'propaganda_confidence', 'propaganda_entropy', 'propaganda', 'bias_logits', 'bias_probabilities', 'bias_predictions', 'bias_confidence', 'bias_entropy', 'bias', 'ideology_logits', 'ideology_probabilities', 'ideology_predictions', 'ideology_confidence', 'ideology_entropy', 'ideology', 'narrative_frame_logits', 'narrative_frame_probabilities', 'narrative_frame_predictions', 'narrative_frame_confidence', 'narrative_frame_entropy', 'narrative_frame', 'task_logits']
+2026-05-01 05:43:23 | INFO | __main__ |  SYSTEM COMPLETED SUCCESSFULLY
