@@ -112,6 +112,11 @@ from src.training.task_scheduler import TaskScheduler, TaskSchedulerConfig
 from src.training.trainer import Trainer
 from src.training.training_setup import TrainingSetupConfig
 from src.training.training_step import TrainingStep, TrainingStepConfig
+from src.training.confidence_filter import ConfidenceFilter, ConfidenceFilterConfig
+from src.training.dynamic_task_balancer import (
+    DynamicTaskWeightBalancer,
+    DynamicTaskBalancerConfig,
+)
 
 from src.utils.seed_utils import set_seed
 
@@ -384,6 +389,60 @@ def _resolve_spike_skip_threshold(settings: Any) -> float:
     training = _get(settings, "training")
     val = _get(training, "spike_skip_threshold")
     return float(val) if val is not None else 150.0
+
+
+def _resolve_use_dynamic_balancer(settings: Any) -> bool:
+    """DYNAMIC-BALANCER: enable EMA-based adaptive task weight balancing.
+
+    Read from ``loss.use_dynamic_balancer`` (default False).  When True
+    a ``DynamicTaskWeightBalancer`` is attached to the LossEngine after
+    construction so it can rebalance per-task loss magnitudes during
+    training and prevent a single dominant task from monopolising the
+    shared encoder's gradient.
+    """
+    loss_section = _get(settings, "loss")
+    val = _get(loss_section, "use_dynamic_balancer") if loss_section is not None else None
+    return bool(val) if val is not None else False
+
+
+def _resolve_dynamic_balancer_config(settings: Any) -> "Optional[Dict[str, Any]]":
+    """Read DynamicTaskBalancerConfig knobs from ``loss.dynamic_balancer.*``."""
+    loss_section = _get(settings, "loss")
+    if loss_section is None:
+        return None
+    sub = _get(loss_section, "dynamic_balancer")
+    if sub is None:
+        return None
+    if isinstance(sub, Mapping):
+        return dict(sub)
+    return {k: getattr(sub, k) for k in vars(sub) if not k.startswith("_")}
+
+
+def _resolve_use_confidence_filter(settings: Any) -> bool:
+    """CONFIDENCE-FILTER: enable confidence-based label noise filtering.
+
+    Read from ``loss.use_confidence_filter`` (default False).  When True
+    a ``ConfidenceFilter`` is attached to the ``MultiTaskLoss`` inside
+    the LossEngine.  Batches in which the model is uniformly uncertain
+    across all heads (likely mislabelled samples) contribute weaker
+    gradients to the shared encoder.
+    """
+    loss_section = _get(settings, "loss")
+    val = _get(loss_section, "use_confidence_filter") if loss_section is not None else None
+    return bool(val) if val is not None else False
+
+
+def _resolve_confidence_filter_config(settings: Any) -> "Optional[Dict[str, Any]]":
+    """Read ConfidenceFilterConfig knobs from ``loss.confidence_filter.*``."""
+    loss_section = _get(settings, "loss")
+    if loss_section is None:
+        return None
+    sub = _get(loss_section, "confidence_filter")
+    if sub is None:
+        return None
+    if isinstance(sub, Mapping):
+        return dict(sub)
+    return {k: getattr(sub, k) for k in vars(sub) if not k.startswith("_")}
 
 
 def _resolve_grad_scaler_init_scale(settings: Any) -> Optional[float]:
@@ -711,6 +770,66 @@ def create_multitask_trainer_fn(
             normalizer_alpha=_resolve_normalizer_alpha(settings),
         )
     )
+
+    # -----------------------------------------------------
+    # 6a. DYNAMIC TASK WEIGHT BALANCER  (Dominant Task fix)
+    #
+    # Attach an EMA-based adaptive balancer to the LossEngine when
+    # ``settings.loss.use_dynamic_balancer = true``.  The balancer
+    # tracks raw per-task loss magnitudes and down-weights tasks that
+    # dominate (e.g. emotion on large datasets) so the shared encoder
+    # receives balanced gradient signal across all heads.
+    #
+    # Config knobs (all optional, YAML path: loss.dynamic_balancer.*):
+    #   ema_alpha:       EMA decay (default 0.1)
+    #   temperature:     Inverse-dominance damping (default 0.5)
+    #   max_weight:      Per-task weight cap (default 3.0)
+    #   min_weight:      Per-task weight floor (default 0.1)
+    #   warmup_steps:    Steps before dynamic weights apply (default 100)
+    # -----------------------------------------------------
+    if _resolve_use_dynamic_balancer(settings):
+        _db_raw = _resolve_dynamic_balancer_config(settings) or {}
+        _valid_db = set(DynamicTaskBalancerConfig.__init__.__code__.co_varnames)
+        _db_kwargs = {k: v for k, v in _db_raw.items() if k in _valid_db and k != "self"}
+        _db_cfg = DynamicTaskBalancerConfig(**_db_kwargs)
+        _balancer = DynamicTaskWeightBalancer(tasks=tasks, config=_db_cfg)
+        loss_engine.attach_balancer(_balancer)
+        logger.info(
+            "DynamicTaskWeightBalancer attached | ema_alpha=%.3f | "
+            "temperature=%.2f | warmup=%d",
+            _db_cfg.ema_alpha,
+            _db_cfg.temperature,
+            _db_cfg.warmup_steps,
+        )
+
+    # -----------------------------------------------------
+    # 6b. CONFIDENCE FILTER  (Label Noise Amplification fix)
+    #
+    # Attach a confidence-based gate to the MultiTaskLoss inside the
+    # LossEngine when ``settings.loss.use_confidence_filter = true``.
+    # Low-confidence batches (model is near-uniform across all heads —
+    # likely mislabelled) contribute a weaker gradient to the shared
+    # encoder, preventing noisy datasets from polluting the shared
+    # representation.
+    #
+    # Config knobs (all optional, YAML path: loss.confidence_filter.*):
+    #   min_confidence:  Threshold in [0, 1] (default 0.35)
+    #   mode:            "hard" | "soft" (default "soft")
+    #   min_gate_factor: Floor gate, avoids zero gradient (default 0.05)
+    #   log_every:       Logging interval in steps (default 200)
+    # -----------------------------------------------------
+    if _resolve_use_confidence_filter(settings):
+        _cf_raw = _resolve_confidence_filter_config(settings) or {}
+        _valid_cf = set(ConfidenceFilterConfig.__init__.__code__.co_varnames)
+        _cf_kwargs = {k: v for k, v in _cf_raw.items() if k in _valid_cf and k != "self"}
+        _cf_cfg = ConfidenceFilterConfig(**_cf_kwargs)
+        _conf_filter = ConfidenceFilter(config=_cf_cfg)
+        loss_engine.loss_module.attach_confidence_filter(_conf_filter)
+        logger.info(
+            "ConfidenceFilter attached | mode=%s | min_confidence=%.3f",
+            _cf_cfg.mode,
+            _cf_cfg.min_confidence,
+        )
 
     # -----------------------------------------------------
     # 7. TASK SCHEDULER  (loss-EMA tracker for the training step)

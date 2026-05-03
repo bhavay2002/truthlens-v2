@@ -60,6 +60,8 @@ from .cross_validation import (
 from .create_trainer_fn import create_trainer_fn
 from .curriculum import CurriculumScheduler, CurriculumConfig, CurriculumState
 from .hard_sample_miner import HardSampleMiner, HardSampleMinerConfig
+from .confidence_filter import ConfidenceFilter, ConfidenceFilterConfig
+from .dynamic_task_balancer import DynamicTaskWeightBalancer, DynamicTaskBalancerConfig
 
 # Optuna-backed tuning is optional — import lazily.
 _LAZY = {
@@ -137,6 +139,11 @@ __all__ = [
     "CurriculumState",
     "HardSampleMiner",
     "HardSampleMinerConfig",
+    # Training pipeline fixes
+    "ConfidenceFilter",
+    "ConfidenceFilterConfig",
+    "DynamicTaskWeightBalancer",
+    "DynamicTaskBalancerConfig",
     # Tuning (lazy)
     "tune_task",
     "tune_all_tasks",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Iterable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Iterable
 
 import torch
 import torch.nn as nn
@@ -11,6 +11,9 @@ from src.models.loss.task_loss_router import TaskLossRouter
 from src.models.loss.loss_normalizer import EMALossNormalizer
 from src.models.loss.coverage_tracker import EMACoverageTracker
 from src.models.loss.base_balancer import BaseBalancer
+
+if TYPE_CHECKING:
+    from src.training.confidence_filter import ConfidenceFilter
 
 # CIRCULAR-IMPORT FIX: ``src.training.loss_functions`` is part of the
 # ``src.training`` package whose ``__init__`` re-exports ``LossEngine``
@@ -213,8 +216,14 @@ class MultiTaskLoss(nn.Module):
 
         self.balancer: Optional[BaseBalancer] = None
 
+        # CONFIDENCE-FILTER: attached via attach_confidence_filter().
+        # Stored as Any to avoid a circular import at module level;
+        # the TYPE_CHECKING guard at the top provides IDE type info.
+        self._confidence_filter: Optional[Any] = None
+
         # diagnostics
         self.last_active_heads: int = 0
+        self.last_confidence_gate: float = 1.0
 
         logger.info(
             "MultiTaskLoss initialized | tasks=%s | norm=%s",
@@ -232,6 +241,31 @@ class MultiTaskLoss(nn.Module):
 
         self.balancer = balancer
         logger.info("Balancer attached: %s", balancer.__class__.__name__)
+
+    def attach_confidence_filter(self, confidence_filter: Any) -> None:
+        """Attach a :class:`~src.training.confidence_filter.ConfidenceFilter`.
+
+        When attached, every forward pass computes a per-batch gate factor
+        from the model's own prediction confidence and multiplies each
+        per-task loss by that factor.  Samples the model is highly
+        uncertain about (likely mislabelled) therefore contribute weaker
+        gradients to the shared encoder.
+
+        Parameters
+        ----------
+        confidence_filter:
+            A ``ConfidenceFilter`` instance.  Accepted as ``Any`` to
+            avoid a circular import; runtime duck-typing is used.
+        """
+        if not hasattr(confidence_filter, "compute_gate_factor"):
+            raise TypeError(
+                "confidence_filter must expose compute_gate_factor(logits, task_types)"
+            )
+        self._confidence_filter = confidence_filter
+        logger.info(
+            "ConfidenceFilter attached: %s",
+            confidence_filter.__class__.__name__,
+        )
 
     # =========================================================
     # MAIN FORWARD
@@ -272,6 +306,22 @@ class MultiTaskLoss(nn.Module):
         # We match by position in self.task_names so the mask ordering
         # is stable regardless of the dict iteration order.
         task_to_col: Dict[str, int] = {t: i for i, t in enumerate(self.task_names)}
+
+        # ── CONFIDENCE GATE (Label Noise Amplification fix) ───────────────
+        # Compute a scalar gate factor ∈ (0, 1] from model confidence before
+        # the per-task loss loop.  Batches in which the model is uniformly
+        # uncertain across all heads (likely mislabelled) receive a smaller
+        # gate factor and therefore contribute weaker gradients to the shared
+        # encoder.  gate_factor = 1.0 when no filter is attached (no-op).
+        gate_factor: float = 1.0
+        if self._confidence_filter is not None:
+            task_types_for_filter: Dict[str, str] = {
+                t: cfg.task_type for t, cfg in self.task_configs.items()
+            }
+            gate_factor = self._confidence_filter.compute_gate_factor(
+                logits, task_types_for_filter
+            )
+        self.last_confidence_gate = gate_factor
 
         task_losses: Dict[str, torch.Tensor] = {}
         raw_losses: Dict[str, torch.Tensor] = {}
@@ -350,6 +400,21 @@ class MultiTaskLoss(nn.Module):
             # -------------------------
 
             weighted_loss = loss * float(cfg.weight)
+
+            # -------------------------
+            # 5b. CONFIDENCE GATE
+            #
+            # Apply the batch-level confidence gate factor computed
+            # before the per-task loop.  gate_factor ∈ (0, 1] so
+            # low-confidence batches contribute smaller gradients to
+            # the shared encoder without zeroing them entirely
+            # (the min_gate_factor floor in ConfidenceFilter prevents
+            # complete gradient suppression).
+            #
+            # When no filter is attached gate_factor = 1.0 (no-op).
+            # -------------------------
+            if gate_factor != 1.0:
+                weighted_loss = weighted_loss * gate_factor
 
             task_losses[task] = weighted_loss
             raw_losses[task] = raw_loss

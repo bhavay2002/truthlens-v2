@@ -364,7 +364,12 @@ class TaskBalancedBatchSampler(Sampler):
     # Dynamic ratio update (spec §1.5)
     # -----------------------------------------------------------------------
 
-    def update_ratios(self, val_scores: Dict[str, float]) -> None:
+    def update_ratios(
+        self,
+        val_scores: Dict[str, float],
+        *,
+        max_task_fraction: float = 1.0,
+    ) -> None:
         """Adjust sampling ratios proportional to ``(1 − val_score_i)``.
 
         Under-performing tasks (low validation score) receive a larger
@@ -375,7 +380,24 @@ class TaskBalancedBatchSampler(Sampler):
         val_scores:
             Dict mapping group name → validation score in [0, 1].
             Groups absent from ``val_scores`` keep their current ratio.
+        max_task_fraction:
+            Hard upper cap on any single task's ratio after
+            rebalancing.  Default 1.0 (no cap — preserves the original
+            behaviour).  Set to e.g. 0.5 to prevent a dominant task
+            from claiming more than half the batch even when all other
+            tasks are near-perfect.
+
+            This is the **Overfitting Dominant Tasks** sampling fix:
+            emotion (or any other high-data-volume task) can reach
+            near-zero gap while still generating far more raw samples
+            per epoch. Capping its ratio ensures the shared encoder
+            sees a balanced mix regardless of relative dataset sizes.
         """
+        if not (0.0 < max_task_fraction <= 1.0):
+            raise ValueError(
+                f"max_task_fraction must be in (0, 1] (got {max_task_fraction})"
+            )
+
         gaps: Dict[str, float] = {}
         for task in self.ratios:
             score = val_scores.get(task, 1.0 - self.ratios[task])
@@ -390,6 +412,42 @@ class TaskBalancedBatchSampler(Sampler):
             return
 
         new_ratios = {t: g / total_gap for t, g in gaps.items()}
+
+        # ── PER-TASK FRACTION CAP (Dominant Task fix) ─────────────────
+        # When max_task_fraction < 1.0, clip any ratio that exceeds the
+        # cap and renormalise the remainder so the ratios still sum to
+        # 1.0 (or to whatever the pre-cap sum was, preserving
+        # proportionality among the uncapped tasks).
+        if max_task_fraction < 1.0:
+            capped: Dict[str, float] = {}
+            excess = 0.0
+            free_sum = 0.0
+
+            for task, ratio in new_ratios.items():
+                if ratio > max_task_fraction:
+                    excess += ratio - max_task_fraction
+                    capped[task] = max_task_fraction
+                else:
+                    capped[task] = ratio
+                    free_sum += ratio
+
+            # Redistribute excess proportionally among uncapped tasks
+            if excess > 1e-9 and free_sum > 1e-9:
+                for task in capped:
+                    if capped[task] < max_task_fraction:
+                        capped[task] += excess * (capped[task] / free_sum)
+                        capped[task] = min(capped[task], max_task_fraction)
+
+            new_ratios = capped
+
+            if excess > 1e-9:
+                logger.info(
+                    "TaskBalancedBatchSampler: max_task_fraction=%.2f "
+                    "clipped %.4f of ratio — redistributed among other tasks.",
+                    max_task_fraction,
+                    excess,
+                )
+
         self.ratios = new_ratios
 
         logger.info(
