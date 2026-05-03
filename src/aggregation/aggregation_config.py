@@ -206,6 +206,85 @@ class FusionConfig(BaseModel):
 
 
 # =========================================================
+# NEURAL AGGREGATOR CONFIG  (Aggregation Engine v2)
+# =========================================================
+
+class NeuralAggregatorConfig(BaseModel):
+    """Configuration for the learned NeuralAggregator (spec §4).
+
+    The neural path is **opt-in** (``enabled=False`` by default) so
+    existing deployments remain unchanged until a trained checkpoint
+    is available. When disabled, ``AggregationPipeline`` falls back
+    to the rule-based ``TruthLensScoreCalculator`` transparently.
+
+    Parameters
+    ----------
+    enabled:
+        Activate the neural aggregator. Requires a valid
+        ``checkpoint_path`` pointing to a file written by
+        ``NeuralAggregator.save``.
+    architecture:
+        ``"mlp"`` — spec §4.1 (fast baseline).
+        ``"attention"`` — spec §4.2 (recommended; provides learned
+        per-feature importance as explanation output).
+    hidden_dim:
+        Width of the hidden layers inside the aggregator.
+    dropout:
+        Dropout probability applied in the aggregator trunk.
+    checkpoint_path:
+        Path to a ``.pt`` checkpoint. ``None`` means no checkpoint is
+        loaded (useful for constructing an untrained module in tests
+        or during training setup).
+    alpha:
+        Base neural blending weight for ``HybridScorer``.
+        ``final = α * neural + (1−α) * rule``.
+    dynamic_alpha:
+        Use confidence-based dynamic α instead of the fixed ``alpha``.
+    alpha_min:
+        Minimum α in dynamic mode (fallback toward rule-based scoring
+        when model confidence is low).
+    alpha_max:
+        Maximum α in dynamic mode.
+    fallback_on_error:
+        If ``True`` (default), runtime errors in the neural forward
+        pass are caught and the result falls back to rule-only scoring
+        rather than crashing the pipeline.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+
+    architecture: Literal["mlp", "attention"] = "attention"
+    hidden_dim: int = 256
+    dropout: float = 0.2
+
+    checkpoint_path: Optional[str] = None
+
+    # Hybrid blending (§7)
+    alpha: float = 0.7
+    dynamic_alpha: bool = True
+    alpha_min: float = 0.2
+    alpha_max: float = 0.9
+
+    fallback_on_error: bool = True
+
+    @field_validator("dropout", "alpha", "alpha_min", "alpha_max")
+    @classmethod
+    def _in_unit(cls, v):
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("Must be in [0, 1]")
+        return v
+
+    @field_validator("hidden_dim")
+    @classmethod
+    def _positive(cls, v):
+        if v < 1:
+            raise ValueError("hidden_dim must be >= 1")
+        return v
+
+
+# =========================================================
 # DRIFT CONFIG (🔥 NEW)
 # =========================================================
 
@@ -251,6 +330,9 @@ class AggregationConfig(BaseModel):
 
     # WGT-AG-2: fusion constants (graph cap, explanation blend)
     fusion: FusionConfig = FusionConfig()
+
+    # Aggregation Engine v2 — learned + hybrid scoring (spec §4–7)
+    neural: NeuralAggregatorConfig = NeuralAggregatorConfig()
 
     # CRIT-AG-12: explicit task -> task_type map. When empty the
     # pipeline lazy-loads from `config/config.yaml`. Set this here

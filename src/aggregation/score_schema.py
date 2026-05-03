@@ -64,10 +64,25 @@ class TruthLensScoreModel(BaseModel):
     # 🔥 NEW
     uncertainty_summary: Optional[Dict[str, float]] = None
 
+    # Aggregation Engine v2 — neural + hybrid outputs
+    neural_credibility_score: Optional[float] = None
+    hybrid_alpha: Optional[float] = None
+
     @field_validator("tasks")
     @classmethod
     def validate_tasks(cls, v):
         return v if v else {}
+
+    @field_validator("neural_credibility_score", "hybrid_alpha")
+    @classmethod
+    def validate_neural(cls, v):
+        if v is None:
+            return v
+        import math
+        fv = float(v)
+        if not math.isfinite(fv):
+            raise ValueError("Must be finite")
+        return fv
 
 
 # =========================================================

@@ -27,6 +27,10 @@ from src.aggregation.score_schema import (
 )
 from src.aggregation.aggregation_validator import AggregationValidator
 
+# Aggregation Engine v2 — learned + hybrid scoring (spec §4–7)
+from src.aggregation.feature_builder import AggregatorFeatureBuilder
+from src.aggregation.hybrid_scorer import HybridScorer
+
 
 logger = logging.getLogger(__name__)
 EPS = 1e-12
@@ -117,7 +121,82 @@ class AggregationPipeline:
             else self._load_task_types()
         )
 
-        logger.info("[AggregationPipeline] Initialized")
+        # ── Aggregation Engine v2 (spec §4–7) ──────────────────────────
+        # AggregatorFeatureBuilder is always constructed — it is
+        # lightweight (no weights) and its feature vector is useful even
+        # when the neural path is disabled (e.g. for offline training
+        # data collection via `analysis_modules["feature_vector"]`).
+        self.feature_builder = AggregatorFeatureBuilder()
+
+        # NeuralAggregator + HybridScorer are only instantiated when
+        # `config.neural.enabled` is True AND a checkpoint exists.
+        # When disabled, `_neural_module` is None and the pipeline
+        # falls back to pure rule-based scoring (existing behaviour).
+        self._neural_module: Optional[Any] = None
+        self.hybrid_scorer: Optional[HybridScorer] = None
+
+        if self.config.neural.enabled:
+            self._init_neural()
+
+        logger.info(
+            "[AggregationPipeline] Initialized | neural=%s",
+            self._neural_module is not None,
+        )
+
+    def _init_neural(self) -> None:
+        """Instantiate the NeuralAggregator and HybridScorer from config.
+
+        Called during ``__init__`` when ``config.neural.enabled`` is True.
+        Errors are non-fatal: the pipeline logs a warning and continues
+        in rule-only mode so a missing / corrupt checkpoint never blocks
+        inference startup.
+        """
+        ncfg = self.config.neural
+        try:
+            import torch
+            from src.aggregation.neural_aggregator import NeuralAggregator
+
+            if ncfg.checkpoint_path:
+                module = NeuralAggregator.load(
+                    ncfg.checkpoint_path,
+                    ncfg,
+                    device="cpu",
+                )
+            else:
+                module = NeuralAggregator.build(
+                    ncfg,
+                    input_dim=self.feature_builder.feature_dim,
+                )
+                module.eval()
+                logger.warning(
+                    "[AggregationPipeline] NeuralAggregator has no "
+                    "checkpoint — running with random weights. "
+                    "Train and set config.neural.checkpoint_path."
+                )
+
+            self._neural_module = module
+
+            self.hybrid_scorer = HybridScorer(
+                alpha=ncfg.alpha,
+                dynamic=ncfg.dynamic_alpha,
+                min_alpha=ncfg.alpha_min,
+                max_alpha=ncfg.alpha_max,
+            )
+            logger.info(
+                "[AggregationPipeline] NeuralAggregator ready | "
+                "arch=%s dim=%d checkpoint=%s",
+                ncfg.architecture,
+                self.feature_builder.feature_dim,
+                ncfg.checkpoint_path or "<untrained>",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[AggregationPipeline] NeuralAggregator init failed — "
+                "falling back to rule-based scoring. Error: %s",
+                exc,
+            )
+            self._neural_module = None
+            self.hybrid_scorer = None
 
     @staticmethod
     def _load_task_types() -> Dict[str, str]:
@@ -316,6 +395,100 @@ class AggregationPipeline:
             explanation_scores=explanation_scores,
         )
 
+        rule_final_score = float(scores_raw.get("final_score", 0.0))
+
+        # =========================
+        # 7a. NEURAL AGGREGATOR  (Aggregation Engine v2, spec §4–7)
+        #     Builds the structured feature vector, runs the neural
+        #     forward pass, then blends with the rule score.
+        #     Guarded: disabled → neural_meta is None, pipeline is
+        #     unchanged from v1.  Runtime error + fallback_on_error →
+        #     neural_meta is None, rule score used as-is.
+        # =========================
+        neural_meta: Optional[Dict[str, Any]] = None
+        hybrid_result: Optional[Dict[str, Any]] = None
+
+        # Always build the feature vector so callers can use it for
+        # offline training data collection even when neural is off.
+        feature_vec = self.feature_builder.build(
+            model_outputs=source,
+            task_signals=task_signals,
+            section_profile=section_profile,
+            analyzer_features=None,
+        )
+
+        if self._neural_module is not None and self.hybrid_scorer is not None:
+            try:
+                import torch
+                with torch.no_grad():
+                    x_t = torch.from_numpy(feature_vec).unsqueeze(0).float()
+                    agg_out = self._neural_module(x_t)
+
+                neural_score = float(agg_out.credibility_score[0].item())
+                risk_probs   = (
+                    torch.softmax(agg_out.risk_logits[0], dim=-1)
+                    .cpu()
+                    .tolist()
+                )
+                exp_weights = agg_out.explanation_weights[0].cpu().tolist()
+
+                # Confidence mean over all tasks for dynamic alpha
+                conf_vals = list(confidence.values()) if confidence else []
+                mean_conf = (
+                    float(np.mean(conf_vals)) if conf_vals else None
+                )
+
+                hybrid_result = self.hybrid_scorer.score(
+                    neural_score=neural_score,
+                    rule_score=rule_final_score,
+                    mean_confidence=mean_conf,
+                    task_confidences=confidence,
+                )
+
+                feature_names = self.feature_builder.feature_names()
+                neural_meta = {
+                    "neural_credibility_score": neural_score,
+                    "rule_final_score":  rule_final_score,
+                    "hybrid_final_score": hybrid_result["final"],
+                    "hybrid_alpha":      hybrid_result["alpha"],
+                    "hybrid_mode":       hybrid_result["mode"],
+                    "risk_probs":  {
+                        "low":    risk_probs[0],
+                        "medium": risk_probs[1],
+                        "high":   risk_probs[2],
+                    },
+                    "top_feature_weights": dict(
+                        sorted(
+                            zip(feature_names, exp_weights),
+                            key=lambda kv: kv[1],
+                            reverse=True,
+                        )[:10]
+                    ),
+                }
+                logger.debug(
+                    "[AggregationPipeline] neural=%.3f rule=%.3f "
+                    "α=%.3f → hybrid=%.3f",
+                    neural_score,
+                    rule_final_score,
+                    hybrid_result["alpha"],
+                    hybrid_result["final"],
+                )
+
+            except Exception as exc:
+                if self.config.neural.fallback_on_error:
+                    logger.warning(
+                        "[AggregationPipeline] Neural forward failed — "
+                        "falling back to rule score. Error: %s", exc,
+                    )
+                    neural_meta = None
+                    hybrid_result = None
+                else:
+                    raise
+
+        # Resolve the final score: hybrid when neural ran, else rule-only.
+        if hybrid_result is not None:
+            scores_raw["final_score"] = hybrid_result["final"]
+
         # =========================
         # 8. RISK
         # =========================
@@ -338,6 +511,10 @@ class AggregationPipeline:
         # =========================
         section_scores = scores_raw.get("section_scores", {})
 
+        # Populate neural extension fields when the neural path ran.
+        _neural_cred  = neural_meta["neural_credibility_score"] if neural_meta else None
+        _hybrid_alpha = neural_meta["hybrid_alpha"]             if neural_meta else None
+
         scores_model = TruthLensScoreModel(
             tasks={
                 section: TaskScore(score=self._safe_unit(val))
@@ -346,6 +523,13 @@ class AggregationPipeline:
             manipulation_risk=self._safe_unit(scores_raw.get("manipulation_risk", 0.0)),
             credibility_score=self._safe_unit(scores_raw.get("credibility_score", 0.0)),
             final_score=self._safe_unit(scores_raw.get("final_score", 0.0)),
+            neural_credibility_score=(
+                self._safe_unit(_neural_cred) if _neural_cred is not None else None
+            ),
+            hybrid_alpha=(
+                float(np.clip(_hybrid_alpha, 0.0, 1.0))
+                if _hybrid_alpha is not None else None
+            ),
         )
 
         risks_model = self._build_risk_model(risks_dict)
@@ -376,6 +560,13 @@ class AggregationPipeline:
                 "weights": adaptive_weights,
                 "entropy": entropy,
                 "confidence": confidence,
+                # Feature vector always included so callers can log it
+                # for offline aggregator training data collection.
+                "feature_vector": feature_vec.tolist(),
+                # Neural aggregator details (None → key present but null
+                # when neural path is disabled/errored — preserves JSON
+                # schema stability for downstream consumers).
+                "neural_aggregator": neural_meta,
             },
         }
 
