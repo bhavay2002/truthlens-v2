@@ -85,6 +85,13 @@ class RhetoricalFeatures(FeatureModel):
     rhetoric_scapegoating_score: float = 0.0
     rhetoric_false_dilemma_score: float = 0.0
     rhetoric_punctuation_score: float = 0.0
+    # BUG-A-RHETO-MODEL: these two keys are present in
+    # RHETORICAL_DEVICE_KEYS and emitted by RhetoricalDeviceDetector
+    # but were missing from this Pydantic model, silently truncating
+    # the serialized feature row and producing a shorter-than-expected
+    # vector from RhetoricalFeatures.vector().
+    rhetoric_intensity: float = 0.0
+    rhetoric_diversity: float = 0.0
 
     def vector(self):
         return self.to_vector(RHETORICAL_DEVICE_KEYS)

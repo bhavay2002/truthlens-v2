@@ -161,6 +161,23 @@ class AnalysisIntegrationRunner:
         for name, analyzer in self._analyzers:
             try:
                 if ctx is not None and hasattr(analyzer, "analyze"):
+                    # BUG-A-PROP-RUNNER guard: some analyzers (currently
+                    # PropagandaPatternDetector) consume *upstream feature
+                    # dicts* rather than a FeatureContext.  Calling
+                    # analyze(ctx) on them ignores the context, falls
+                    # back to all-empty upstream dicts, and silently
+                    # returns an all-zero feature dict — corrupting
+                    # downstream consumers.  Record a structured gap
+                    # instead so the caller sees an explicit signal.
+                    if getattr(analyzer, "requires_upstream_features", False):
+                        results[name] = {
+                            "skipped": (
+                                "requires_upstream_features — "
+                                "invoke via the orchestrator with "
+                                "upstream feature dicts"
+                            )
+                        }
+                        continue
                     # Modern analyzers expect a FeatureContext.
                     results[name] = analyzer.analyze(ctx)
                 else:

@@ -164,8 +164,17 @@ class NarrativePropagationAnalyzer(BaseAnalyzer):
         # PROPAGATION INTENSITY
         # -----------------------------------------------------
 
+        # BUG-A-PROP-INTENSITY: previously used sum(raw.values())
+        # which is the *sum* of 5 independent per-category token
+        # densities, each individually in [0, 1].  The sum ranges
+        # [0, 5], so the 0.4 coefficient alone can reach 2.0 —
+        # saturating the feature to 1.0 for any article with moderate
+        # conflict across even two or three categories and making the
+        # other three components (opposition, polarization, phrase)
+        # invisible.  Use the mean of the raw densities instead so
+        # the weighted sum is bounded by (0.4 + 0.2 + 0.2 + 0.2) = 1.0.
         propagation = (
-            0.4 * sum(raw.values()) +
+            0.4 * (sum(raw.values()) / max(len(raw), 1)) +
             0.2 * opposition +
             0.2 * polarization +
             0.2 * phrase

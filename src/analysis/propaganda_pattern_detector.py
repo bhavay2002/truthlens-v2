@@ -76,6 +76,11 @@ class PropagandaPatternDetector(BaseAnalyzer):
     name = "propaganda_pattern"
     expected_keys = set(PROPAGANDA_PATTERN_KEYS)
     use_cache = False  # inputs are upstream features, not the ctx itself
+    # BUG-A-PROP-RUNNER: signals to AnalysisIntegrationRunner (and any
+    # other generic caller) that this analyzer cannot be invoked with a
+    # bare FeatureContext.  It aggregates upstream analyzer output dicts
+    # rather than consuming raw text / token features directly.
+    requires_upstream_features: bool = True
 
     def __init__(self, config: PropagandaPatternConfig | None = None):
         self.config = config or PropagandaPatternConfig()

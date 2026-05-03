@@ -92,8 +92,16 @@ class FramingAnalyzer(BaseAnalyzer):
         # HIGH-LEVEL FEATURES
         # -----------------------------------------------------
 
+        # CRIT-A-FRAMING-DIV: snapshot the 5-frame distribution
+        # BEFORE adding the derived frame_dominance_score key.
+        # Passing the mutated dict to _frame_diversity inflated
+        # max_entropy from log(5) to log(6), included the max-value
+        # as an extra probability mass in the probs vector (making
+        # sum > 1.0), and inflated diversity for concentrated
+        # single-frame articles (true diversity = 0 → reported ~0.39).
+        base_scores = dict(scores)
         scores.update(self._frame_dominance(scores))
-        scores.update(self._frame_diversity(scores))
+        scores.update(self._frame_diversity(base_scores))
 
         return scores
 

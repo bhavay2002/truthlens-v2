@@ -12,6 +12,7 @@ from src.analysis._text_features import (
     term_ratio,
     phrase_match_count,
     normalize_lexicon_terms,
+    safe_normalized_entropy,
 )
 from src.analysis.feature_schema import RHETORICAL_DEVICE_KEYS, make_vector
 
@@ -90,7 +91,11 @@ class RhetoricalDeviceDetector(BaseAnalyzer):
         # GLOBAL INTENSITY
         # -----------------------------------------------------
 
-        intensity = sum(raw.values()) / (len(raw) + EPS)
+        # NUM-A-RHETO-INTENSITY: dividing by (len(raw) + EPS) introduced
+        # a tiny downward bias (≈ 1e-8 / 7 ≈ 1e-9) on every call with
+        # no numerical-stability benefit — len(raw) is a positive
+        # integer, never zero.  Use max(len(raw), 1) instead.
+        intensity = sum(raw.values()) / max(len(raw), 1)
 
         # -----------------------------------------------------
         # DIVERSITY
@@ -188,18 +193,10 @@ class RhetoricalDeviceDetector(BaseAnalyzer):
     # =========================================================
 
     def _entropy(self, dist: Dict[str, float]) -> float:
-
-        values = np.array(list(dist.values()), dtype=np.float32)
-
-        if values.sum() < EPS:
-            return 0.0
-
-        probs = values / (values.sum() + EPS)
-
-        entropy = -np.sum(probs * np.log(probs + EPS))
-        max_entropy = np.log(len(probs))
-
-        return float(entropy / (max_entropy + EPS))
+        # DRY-A-ENTROPY: delegate to the shared, well-guarded helper
+        # (same n<=1 / max_entropy<EPS / sum<EPS guards) instead of
+        # duplicating the logic here.
+        return safe_normalized_entropy(dist.values())
 
     # =========================================================
 
