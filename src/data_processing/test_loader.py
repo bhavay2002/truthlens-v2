@@ -32,6 +32,11 @@ Each loader returns:
     labels : dict[str, np.ndarray]
                key   = TASK_CONFIG task name
                value = (N,)  for multiclass  OR  (N, C)  for multilabel
+
+Fixes applied (audit v3):
+  EDGE-D1: replaced all ``print()`` calls with ``logger`` so output is
+    routed through the standard logging system and respects log-level
+    filtering / log-file sinks in production.
 """
 
 from __future__ import annotations
@@ -191,18 +196,23 @@ class TestDataLoader:
         for stem, schema in DATASET_SCHEMAS.items():
             path = _find_file(self.test_dir, stem)
             if path is None:
-                logger.warning("Dataset file not found: %s/{%s}.{csv,json,jsonl}", self.test_dir, stem)
+                # EDGE-D1: use logger instead of print
+                logger.warning(
+                    "Dataset file not found: %s/{%s}.{csv,json,jsonl}",
+                    self.test_dir, stem,
+                )
                 continue
             try:
                 texts, labels = load_dataset(path, schema)
                 task = schema["task"]
                 results[task] = (texts, labels)
                 label_shape = {t: arr.shape for t, arr in labels.items()}
-                logger.info("Loaded %-20s  %d samples  labels=%s", task, len(texts), label_shape)
-                print(f"  ✓ {stem:<12} → task={task:<18} samples={len(texts)}  label_shape={label_shape}")
+                logger.info(
+                    "Loaded %-20s  %d samples  labels=%s",
+                    task, len(texts), label_shape,
+                )
             except Exception as exc:
                 logger.error("Failed to load %s: %s", path, exc)
-                print(f"  ✗ {stem:<12} → ERROR: {exc}")
         return results
 
     def load_one(self, stem: str) -> Tuple[List[str], Dict[str, np.ndarray]]:
@@ -218,11 +228,9 @@ class TestDataLoader:
         return load_dataset(path, schema)
 
     def summary(self) -> None:
-        """Print what files are present / missing in the test directory."""
-        print(f"\nTest directory: {self.test_dir}")
-        print("-" * 50)
+        """Log what files are present / missing in the test directory."""
+        logger.info("Test directory: %s", self.test_dir)
         for stem, schema in DATASET_SCHEMAS.items():
             path = _find_file(self.test_dir, stem)
             status = f"FOUND  ({path.name})" if path else "MISSING"
-            print(f"  {stem:<12} → {schema['task']:<20}  {status}")
-        print()
+            logger.info("  %-12s → %-20s  %s", stem, schema["task"], status)

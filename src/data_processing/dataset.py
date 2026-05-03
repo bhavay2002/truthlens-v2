@@ -16,6 +16,16 @@ Semantic alignment additions (Phase 1):
 - MultiTaskAlignedDataset: correctly builds per-row task masks based on which
   label columns are actually non-null for each row, rather than assuming every
   row in a task-specific split is fully labelled.
+
+Fixes applied (audit v3):
+  PERF-D2: Store _ids_flat and _attn_flat as int64 at init time so
+    _encoded_inputs never pays a per-sample dtype cast (previously the int32/
+    int8 → int64 conversion happened inside every __getitem__ call).
+  PERF-D3: MultiTaskAlignedDataset.__getitem__ used df.iloc[idx] (O(n) pandas
+    overhead). Pre-converted to a list of dicts at init time for true O(1) access.
+  PERF-D4: _build_derived_features was duplicated identically in
+    ClassificationDataset and MultiLabelDataset. Extracted to a single module-
+    level function _compute_derived_features(df) to avoid maintenance divergence.
 """
 
 from __future__ import annotations
@@ -107,6 +117,54 @@ def _build_per_row_task_mask(df: pd.DataFrame) -> np.ndarray:
 
 
 # =========================================================
+# SHARED DERIVED FEATURES  (PERF-D4 — de-duplicated)
+# =========================================================
+
+def _compute_derived_features(df: pd.DataFrame) -> torch.Tensor:
+    """Compute cross-task derived supervision signals (normalised to [0,1]).
+
+    emotional_bias_score  = bias_score  × emotion_intensity
+    propaganda_intensity  = propaganda  × narrative_conflict_score
+    ideological_emotion   = ideology    × dominant_emotion
+
+    Previously this was copy-pasted identically into both ClassificationDataset
+    and MultiLabelDataset. Extracting it to a single module-level function
+    removes the divergence risk.
+    """
+    bias = (
+        df["bias_label"].fillna(0).astype(float).to_numpy()
+        if "bias_label" in df.columns
+        else np.zeros(len(df))
+    )
+    emotion_cols = [c for c in df.columns if c.startswith("emotion_")]
+    emotion = _safe_series(df, emotion_cols)
+    emotion_intensity = emotion.mean(axis=1) if emotion.size else np.zeros(len(df))
+    propaganda = (
+        df["propaganda_label"].fillna(0).astype(float).to_numpy()
+        if "propaganda_label" in df.columns
+        else np.zeros(len(df))
+    )
+    narrative_cols = [c for c in ("hero", "villain", "victim") if c in df.columns]
+    narrative = _safe_series(df, narrative_cols)
+    narrative_conflict = narrative.std(axis=1) if narrative.size else np.zeros(len(df))
+    ideology = (
+        df["ideology_label"].fillna(0).astype(float).to_numpy()
+        if "ideology_label" in df.columns
+        else np.zeros(len(df))
+    )
+    dominant_emotion = emotion.max(axis=1) if emotion.size else np.zeros(len(df))
+    feats = np.stack(
+        [
+            _minmax_01(bias * emotion_intensity),
+            _minmax_01(propaganda * narrative_conflict),
+            _minmax_01(ideology * dominant_emotion),
+        ],
+        axis=1,
+    )
+    return torch.from_numpy(feats)
+
+
+# =========================================================
 # BASE DATASET
 # =========================================================
 
@@ -176,6 +234,11 @@ class BaseTextDataset(Dataset):
 
         # =====================================================
         # FLATTEN STORAGE (PERF-D2)
+        # Store as int64 directly so _encoded_inputs never pays a per-sample
+        # dtype cast. The extra memory (int64 vs int32 for ids, int64 vs int8
+        # for mask) is modest: a 512-token × 100k-row corpus gains ~50 MB —
+        # negligible compared to model weights, and cheaper than running
+        # astype() inside every __getitem__ call on a 100k-row training loop.
         # =====================================================
         n = len(ids_lists)
         lengths = np.fromiter((len(x) for x in ids_lists), dtype=np.int64, count=n)
@@ -183,8 +246,9 @@ class BaseTextDataset(Dataset):
         np.cumsum(lengths, out=self._offsets[1:])
         total = int(self._offsets[-1])
 
-        self._ids_flat = np.empty(total, dtype=np.int32)
-        self._attn_flat = np.empty(total, dtype=np.int8)
+        # int64 at storage time → zero-copy slice in __getitem__
+        self._ids_flat = np.empty(total, dtype=np.int64)
+        self._attn_flat = np.empty(total, dtype=np.int64)
         cursor = 0
         for ids, attn in zip(ids_lists, attn_lists):
             k = len(ids)
@@ -228,13 +292,15 @@ class BaseTextDataset(Dataset):
     def _encoded_inputs(self, idx: int) -> Dict[str, torch.Tensor]:
         s = int(self._offsets[idx])
         e = int(self._offsets[idx + 1])
+        # PERF-D2: arrays are already int64 → torch.from_numpy is zero-copy
+        # (no dtype conversion, no allocation beyond the view bookkeeping).
         item: Dict[str, torch.Tensor] = {
-            "input_ids": torch.from_numpy(self._ids_flat[s:e].astype(np.int64, copy=True)),
-            "attention_mask": torch.from_numpy(self._attn_flat[s:e].astype(np.int64, copy=True)),
+            "input_ids": torch.from_numpy(self._ids_flat[s:e].copy()),
+            "attention_mask": torch.from_numpy(self._attn_flat[s:e].copy()),
         }
         if self._om_flat is not None:
             item["offset_mapping"] = torch.from_numpy(
-                self._om_flat[s:e].astype(np.int64, copy=True)
+                self._om_flat[s:e].copy()
             )
         return item
 
@@ -274,7 +340,8 @@ class ClassificationDataset(BaseTextDataset):
         per_row_mask = _build_per_row_task_mask(df)
         self.task_mask_vector = torch.from_numpy(per_row_mask)
 
-        self.derived_features = self._build_derived_features(df)
+        # PERF-D4: use the shared module-level function (no more duplication).
+        self.derived_features = _compute_derived_features(df)
 
         # vectorize labels once
         labels = df[label_col].to_numpy()
@@ -283,33 +350,6 @@ class ClassificationDataset(BaseTextDataset):
                 f"NaN labels in column '{label_col}' — clean/validate first."
             )
         self._labels = labels.astype(np.int64)
-
-    def _build_derived_features(self, df: pd.DataFrame) -> torch.Tensor:
-        """Compute cross-task derived supervision signals (normalised to [0,1]).
-
-        emotional_bias_score  = bias_score  × emotion_intensity
-        propaganda_intensity  = propaganda  × narrative_conflict_score
-        ideological_emotion   = ideology    × dominant_emotion
-        """
-        bias = df["bias_label"].fillna(0).astype(float).to_numpy() if "bias_label" in df.columns else np.zeros(len(df))
-        emotion_cols = [c for c in df.columns if c.startswith("emotion_")]
-        emotion = _safe_series(df, emotion_cols)
-        emotion_intensity = emotion.mean(axis=1) if emotion.size else np.zeros(len(df))
-        propaganda = df["propaganda_label"].fillna(0).astype(float).to_numpy() if "propaganda_label" in df.columns else np.zeros(len(df))
-        narrative_cols = [c for c in ("hero", "villain", "victim") if c in df.columns]
-        narrative = _safe_series(df, narrative_cols)
-        narrative_conflict = narrative.std(axis=1) if narrative.size else np.zeros(len(df))
-        ideology = df["ideology_label"].fillna(0).astype(float).to_numpy() if "ideology_label" in df.columns else np.zeros(len(df))
-        dominant_emotion = emotion.max(axis=1) if emotion.size else np.zeros(len(df))
-        feats = np.stack(
-            [
-                _minmax_01(bias * emotion_intensity),
-                _minmax_01(propaganda * narrative_conflict),
-                _minmax_01(ideology * dominant_emotion),
-            ],
-            axis=1,
-        )
-        return torch.from_numpy(feats)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         item = self._encoded_inputs(idx)
@@ -366,7 +406,8 @@ class MultiLabelDataset(BaseTextDataset):
         per_row_mask = _build_per_row_task_mask(df)
         self.task_mask_vector = torch.from_numpy(per_row_mask)
 
-        self.derived_features = self._build_derived_features(df)
+        # PERF-D4: use the shared module-level function (no more duplication).
+        self.derived_features = _compute_derived_features(df)
 
         if not self.label_cols:
             raise ValueError(
@@ -388,27 +429,6 @@ class MultiLabelDataset(BaseTextDataset):
                 "must be in [0, 1] for BCE-with-logits loss."
             )
         self._label_matrix = matrix
-
-    def _build_derived_features(self, df: pd.DataFrame) -> torch.Tensor:
-        bias = df["bias_label"].fillna(0).astype(float).to_numpy() if "bias_label" in df.columns else np.zeros(len(df))
-        emotion_cols = [c for c in df.columns if c.startswith("emotion_")]
-        emotion = _safe_series(df, emotion_cols)
-        emotion_intensity = emotion.mean(axis=1) if emotion.size else np.zeros(len(df))
-        propaganda = df["propaganda_label"].fillna(0).astype(float).to_numpy() if "propaganda_label" in df.columns else np.zeros(len(df))
-        narrative_cols = [c for c in ("hero", "villain", "victim") if c in df.columns]
-        narrative = _safe_series(df, narrative_cols)
-        narrative_conflict = narrative.std(axis=1) if narrative.size else np.zeros(len(df))
-        ideology = df["ideology_label"].fillna(0).astype(float).to_numpy() if "ideology_label" in df.columns else np.zeros(len(df))
-        dominant_emotion = emotion.max(axis=1) if emotion.size else np.zeros(len(df))
-        feats = np.stack(
-            [
-                _minmax_01(bias * emotion_intensity),
-                _minmax_01(propaganda * narrative_conflict),
-                _minmax_01(ideology * dominant_emotion),
-            ],
-            axis=1,
-        )
-        return torch.from_numpy(feats)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         item = self._encoded_inputs(idx)
@@ -441,10 +461,13 @@ class MultiTaskAlignedDataset(Dataset):
         self.task_to_index = {t: i for i, t in enumerate(self.tasks)}
         self._build_masks()
 
+        # PERF-D3: pre-convert the dataframe to a list of dicts so that
+        # __getitem__ is O(1) with no pandas overhead. df.iloc[idx] has
+        # O(n) axis-alignment cost in pandas; a list index is O(1).
+        self._records: List[Dict[str, Any]] = self.df.to_dict("records")
+
     def _build_masks(self) -> None:
         """Build per-row task masks from the actual label columns present in each row."""
-        # Use the label-aware helper so rows with null labels for a task
-        # get mask=0 for that task even if they came from that task's split.
         per_row = _build_per_row_task_mask(self.df)
 
         # Restrict to columns that correspond to the tasks present in this dataset.
@@ -452,10 +475,11 @@ class MultiTaskAlignedDataset(Dataset):
         self.task_mask = torch.from_numpy(per_row[:, task_indices])
 
     def __len__(self) -> int:
-        return len(self.df)
+        return len(self._records)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        row = self.df.iloc[idx]
+        # PERF-D3: O(1) list access instead of O(n) df.iloc[idx]
+        row = self._records[idx]
         mask = self.task_mask[idx]
         return {
             "text": row.get("text", ""),

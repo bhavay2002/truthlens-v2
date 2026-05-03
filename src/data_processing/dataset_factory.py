@@ -5,6 +5,17 @@ Single entry point: ``build_dataset(task=…, df=…, tokenizer=…, …)``.
 All label-column names are pulled from ``data_contracts.CONTRACTS``,
 guaranteeing schema consistency across cleaning, validation, sampling
 and dataset construction.
+
+Fixes applied (audit v3):
+  BUG-D1: build_task_masks produced incorrect per-row masks.
+    - mask_emotion and mask_narrative were scalar integers (1 or 0),
+      not per-row boolean Series, so the resulting DataFrame column was
+      broadcast to a single scalar rather than a N-length array.
+    - mask_propaganda and mask_ideology always returned True because
+      .fillna(0).notna() is trivially True on a fill result.
+    Rewritten to produce correct per-row binary Series for every task.
+  UNUSED-D1 note: build_task_masks is not called anywhere in the core
+    pipeline; it is exposed here as a utility for external callers.
 """
 
 from __future__ import annotations
@@ -192,10 +203,48 @@ def validate_dataset_compatibility(task: str, df: pd.DataFrame) -> None:
 
 
 def build_task_masks(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of ``df`` with per-row binary mask columns for each task.
+
+    BUG-D1 fix: the previous implementation produced scalar integers (1 or 0)
+    for emotion and narrative (broadcasting a scalar to the entire column) and
+    always True for propaganda / ideology (``fillna(0).notna()`` is trivially
+    True). All five masks are now correct per-row boolean Series.
+
+    Mask semantics: 1 if the row has a non-null, non-negative value for the
+    task's primary label column(s); 0 otherwise.
+    """
     out = df.copy()
-    out["mask_bias"] = (out.get("bias_label", pd.Series([0] * len(out))).fillna(0).astype(float) >= 0).astype(int)
-    out["mask_emotion"] = 1 if any(c.startswith("emotion_") for c in out.columns) else 0
-    out["mask_propaganda"] = (out.get("propaganda_label", pd.Series([0] * len(out))).fillna(0).notna()).astype(int)
-    out["mask_ideology"] = (out.get("ideology_label", pd.Series([0] * len(out))).fillna(0).notna()).astype(int)
-    out["mask_narrative"] = 1 if any(c in out.columns for c in ["hero", "villain", "victim"]) else 0
+
+    # bias — single integer label column
+    if "bias_label" in out.columns:
+        out["mask_bias"] = out["bias_label"].notna().astype(int)
+    else:
+        out["mask_bias"] = 0
+
+    # emotion — any emotion_* column present and non-null
+    emotion_cols = [c for c in out.columns if c.startswith("emotion_")]
+    if emotion_cols:
+        out["mask_emotion"] = out[emotion_cols].notna().any(axis=1).astype(int)
+    else:
+        out["mask_emotion"] = 0
+
+    # propaganda — single integer label column
+    if "propaganda_label" in out.columns:
+        out["mask_propaganda"] = out["propaganda_label"].notna().astype(int)
+    else:
+        out["mask_propaganda"] = 0
+
+    # ideology — single integer label column
+    if "ideology_label" in out.columns:
+        out["mask_ideology"] = out["ideology_label"].notna().astype(int)
+    else:
+        out["mask_ideology"] = 0
+
+    # narrative — any of hero/villain/victim present and non-null
+    narrative_cols = [c for c in ("hero", "villain", "victim") if c in out.columns]
+    if narrative_cols:
+        out["mask_narrative"] = out[narrative_cols].notna().any(axis=1).astype(int)
+    else:
+        out["mask_narrative"] = 0
+
     return out

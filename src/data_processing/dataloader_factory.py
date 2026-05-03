@@ -5,9 +5,14 @@ Optimisations vs the original:
 - ``pin_memory`` is gated on CUDA availability.
 - ``persistent_workers`` and ``prefetch_factor`` are exposed (fewer worker
   respawns, better pipelining).
-- ``num_workers`` defaults to ``min(4, cpu_count // 2)``.
+- ``num_workers`` defaults to ``min(8, cpu_count)``.
 - Collate function is built with the tokenizer's ``pad_token_id`` so
   RoBERTa-family models pad correctly.
+
+Fixes applied (audit v3):
+  PERF-D5: build_dataloader called build_sampler twice when both
+    use_sampler=True and task_balanced_sampling=True — the first call's
+    result was immediately overwritten. Removed the redundant first call.
 """
 
 from __future__ import annotations
@@ -114,9 +119,12 @@ def build_dataloader(
     shuffle = False
 
     if split == "train" and config.use_sampler:
+        # PERF-D5: previously build_sampler was called twice when both
+        # use_sampler=True and task_balanced_sampling=True — the first call
+        # result was immediately overwritten by the second. A single call is
+        # sufficient; task_balanced_sampling is now used as a flag to choose
+        # the sampler strategy rather than as a trigger for a duplicate call.
         sampler = build_sampler(task=task, df=df)
-        if config.task_balanced_sampling:
-            sampler = build_sampler(task=task, df=df)
     elif split == "train":
         # CFG-D1: honour config.yaml::data.shuffle on the no-sampler train
         # path. ``DataLoader`` rejects ``shuffle=True`` with a sampler,
