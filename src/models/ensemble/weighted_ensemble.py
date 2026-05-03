@@ -94,9 +94,14 @@ class WeightedEnsembleModel(nn.Module):
         logits = (stacked * weights).sum(dim=0) / weights.sum()
 
         probs = F.softmax(logits, dim=-1)
+        # N1-FIX: compute entropy in log-space (matches ensemble_model.py).
+        # ``log(probs + 1e-12)`` introduces a bias when probs are near 1.0
+        # because the additive epsilon shifts the argument off the simplex.
+        # F.log_softmax reuses the existing softmax denominator and is exact.
         preds = probs.argmax(dim=-1)
         confidence = probs.max(dim=-1).values
-        entropy = -torch.sum(probs * torch.log(probs + 1e-12), dim=-1)
+        log_probs = F.log_softmax(logits, dim=-1)
+        entropy = -(probs * log_probs).sum(dim=-1)
 
         return {
             "logits": logits,
