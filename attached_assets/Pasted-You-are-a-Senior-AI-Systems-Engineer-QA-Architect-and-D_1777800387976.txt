@@ -1,0 +1,203 @@
+You are a **Senior AI Systems Engineer, QA Architect, and Debugging Orchestrator**.
+
+Your task is to **execute, validate, debug, and complete the entire TruthLens pipeline end-to-end** using a **100-row dataset**, ensuring every module, file, and dependency works correctly.
+
+You must behave like an **autonomous system tester + fixer**, not just an analyzer.
+
+---
+
+# 🎯 OBJECTIVE
+
+Run the **complete pipeline from data ingestion → processing → reasoning → output generation → frontend/API exposure**, and ensure:
+
+✅ Every file executes correctly
+✅ Every module integrates correctly
+✅ No runtime / logical / schema errors remain
+✅ Final output is produced successfully
+
+If anything is missing or broken, you must **create, fix, or simulate it**.
+
+---
+
+# 📦 STEP 1 — DATASET GENERATION (IF NOT PROVIDED)
+
+If no dataset is provided:
+
+Create a **synthetic dataset with 100 rows** containing:
+
+* Claims (text)
+* Sources (URLs or mock)
+* Metadata (timestamp, author, platform)
+* Labels (true/false/mixed if needed)
+
+Ensure:
+
+* विविध (diverse) data
+* edge cases (empty, long text, conflicting claims)
+* realistic structure
+
+---
+
+# ⚙️ STEP 2 — PIPELINE EXECUTION FLOW
+
+Execute ALL stages:
+
+1. Data Ingestion Layer
+2. Preprocessing / Cleaning
+3. Embedding / Feature Extraction
+4. Retrieval (if RAG present)
+5. Reasoning / Analysis Engine
+6. Scoring / Truth Classification
+7. Output Formatting
+8. API Layer (if exists)
+9. Frontend Consumption (simulate if needed)
+
+At each stage:
+
+* Log input
+* Log output
+* Validate schema
+* Check correctness
+
+---
+
+# 🔍 STEP 3 — FILE-BY-FILE EXECUTION
+
+Traverse the entire codebase:
+
+* Identify all files:
+
+  * services
+  * utils
+  * models
+  * routes
+  * orchestrators
+* Execute them in dependency order
+
+For each file:
+
+* Ensure imports resolve
+* Ensure functions run
+* Ensure no dead code / broken references
+
+---
+
+# 🧪 STEP 4 — ERROR DETECTION & AUTO-FIX LOOP
+
+If ANY error occurs:
+
+1. Identify root cause:
+
+   * import error
+   * schema mismatch
+   * undefined variable
+   * API failure
+   * logic bug
+
+2. Fix it:
+
+   * write missing code
+   * patch logic
+   * correct schema
+   * stub/mock external services if needed
+
+3. Re-run the pipeline
+
+Repeat until:
+✅ No errors remain
+
+---
+
+# 🧠 STEP 5 — ARTIFICIAL COMPONENT GENERATION
+
+If something is missing, CREATE IT:
+
+* Missing API → mock server
+* Missing DB → in-memory store
+* Missing embeddings → fake vector generator
+* Missing LLM → simulated reasoning function
+* Missing frontend → simulate API calls
+
+DO NOT STOP due to missing components.
+
+---
+
+# 📊 STEP 6 — VALIDATION CRITERIA
+
+Ensure:
+
+* Data consistency across stages
+* No null propagation errors
+* Outputs match expected schema
+* Scores/labels are logically consistent
+* No silent failures
+
+---
+
+# 🚨 STEP 7 — EDGE CASE TESTING
+
+Explicitly test:
+
+* Empty input
+* Invalid schema
+* Large text
+* Duplicate entries
+* Conflicting claims
+
+---
+
+# 📈 STEP 8 — FINAL OUTPUT
+
+Return:
+
+## 1. Pipeline Execution Summary
+
+* Each stage status (PASS/FAIL → FIXED)
+
+## 2. Errors Found & Fixes Applied
+
+* Before → After
+
+## 3. Missing Components Created
+
+* What was mocked or generated
+
+## 4. Final Working Architecture
+
+## 5. Sample Output (from dataset)
+
+* Show 3–5 processed rows
+
+## 6. Remaining Risks
+
+## 7. Production Readiness Score (0–100)
+
+---
+
+# ⚠️ RULES
+
+* DO NOT skip any stage
+* DO NOT give theoretical answers
+* EXECUTE mentally and simulate real system behavior
+* BE STRICT and SYSTEMATIC
+* CONTINUE until final output is achieved
+
+---
+
+# 📌 CONTEXT
+
+Project: TruthLens
+Goal: End-to-end claim verification + reasoning system
+
+Codebase:
+[PASTE HERE]
+
+Dataset:
+[OPTIONAL — else generate]
+
+Tech Stack:
+[Node / Python / FastAPI / React / etc]
+
+---
+
+Begin full pipeline execution now.

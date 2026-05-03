@@ -159,9 +159,15 @@ class _BaseAnalysisFeature(BaseFeature):
             return {}
 
         # 🔥 FIX: support both interfaces
+        # AttributeError is raised (not TypeError) when the base_feature
+        # FeatureContext is passed to an analysis-layer analyzer that
+        # expects src.analysis.feature_context.FeatureContext and calls
+        # ensure_tokens() / safe_n_tokens().  Falling back to the plain
+        # text string triggers the backward-compat wrapper in BaseAnalyzer
+        # which constructs the correct FeatureContext automatically.
         try:
             return self._analyzer.analyze(context)
-        except TypeError:
+        except (TypeError, AttributeError):
             return self._analyzer.analyze(context.text)
 
     # -----------------------------------------------------
