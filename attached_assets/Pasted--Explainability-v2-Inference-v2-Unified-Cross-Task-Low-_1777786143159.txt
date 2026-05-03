@@ -1,0 +1,345 @@
+# 🧠 Explainability v2 + ⚡ Inference v2 — Unified, Cross-Task, Low-Latency
+
+## 0. Context
+
+Moving from:
+
+* Per-task explanations (LIME/SHAP per head)
+* Sequential inference (model → analyzers → aggregation)
+
+To:
+
+* **Cross-task attribution**
+* **Global explanations across tasks**
+* **Single-pass inference with optional post-hoc analyzers**
+
+---
+
+# 🔷 1. Cross-Task Attribution (MANDATORY)
+
+## 1.1 Goal
+
+Quantify **how one task’s representation influences another task’s prediction**.
+
+Examples:
+
+* “Bias ↑ increases probability of anger”
+* “Narrative conflict ↑ drives propaganda score”
+
+---
+
+## 1.2 Method A — Inter-Task Gradient Attribution (Recommended)
+
+For task i influenced by task j:
+
+```python id="grad_xtask"
+# H_j: representation for task j
+# y_i: logit/prob for task i
+influence_ij = || ∂y_i / ∂H_j ||
+```
+
+### Implementation Notes
+
+* Compute with `torch.autograd.grad`
+* Aggregate per sample:
+
+  * L2 norm or mean absolute gradient
+* Normalize across j for a fixed i (softmax) → **influence distribution**
+
+---
+
+## 1.3 Method B — Gating Weights (Cheap + Stable)
+
+If using gated interaction:
+
+```python id="gate_xtask"
+influence_ij = sigmoid(G_ij)
+```
+
+Expose learned gates directly as **cross-task influence matrix**.
+
+---
+
+## 1.4 Output Contract
+
+```json
+{
+  "cross_task_influence": {
+    "bias":      {"emotion": 0.31, "ideology": 0.22, ...},
+    "emotion":   {"bias": 0.27, "narrative": 0.19, ...},
+    "propaganda":{"narrative": 0.44, ...}
+  }
+}
+```
+
+---
+
+# 🔷 2. Multi-Head SHAP (Global, Not Per-Task)
+
+## 2.1 Goal
+
+Explain **final credibility score** as a function of:
+
+* All task outputs
+* All analyzer signals
+* Cross-task features
+
+---
+
+## 2.2 Feature Space
+
+```python id="shap_feats"
+X = concat([
+  bias_score, ideology_probs, emotion_vec,
+  propaganda_score, narrative_roles/frames,
+  analyzer_features, entropy/confidence,
+  cross_task_features
+])
+```
+
+---
+
+## 2.3 SHAP Setup
+
+* Use `DeepExplainer` or `KernelExplainer` on the **Neural Aggregator**
+* Background dataset: stratified sample (1–5k rows)
+
+```python id="shap_call"
+explainer = shap.DeepExplainer(aggregator, background)
+shap_values = explainer.shap_values(X_sample)
+```
+
+---
+
+## 2.4 Output
+
+```json
+{
+  "global_explanation": [
+    {"feature": "propaganda_score", "shap": 0.18},
+    {"feature": "emotion_anger", "shap": 0.11},
+    {"feature": "bias_score", "shap": -0.07}
+  ]
+}
+```
+
+* Positive → pushes toward FAKE
+* Negative → pushes toward REAL
+
+---
+
+## 🔷 3. Attention Graph Visualization (Token → Task → Decision)
+
+## 3.1 Goal
+
+Provide a **traceable path**:
+
+> token → task representation → final decision
+
+---
+
+## 3.2 Components
+
+### A. Token → Task Attribution
+
+Use attention rollout or gradient × input:
+
+```python id="tok_task"
+A_token_task = rollout_attention(encoder_attn)  # [tokens]
+```
+
+Project into task spaces (via task projections).
+
+---
+
+### B. Task → Decision Attribution
+
+Use:
+
+* Cross-task influence (Section 1)
+* Aggregator feature weights (SHAP or attention)
+
+---
+
+## 3.3 Graph Construction
+
+Nodes:
+
+* Tokens
+* Tasks (bias, emotion, …)
+* Final decision
+
+Edges:
+
+* token → task (attention weight)
+* task → task (influence_ij)
+* task → decision (SHAP/aggregator weight)
+
+---
+
+## 3.4 Output Schema
+
+```json
+{
+  "graph": {
+    "nodes": ["token:miracle", "task:propaganda", "decision"],
+    "edges": [
+      {"from":"token:miracle","to":"task:propaganda","weight":0.21},
+      {"from":"task:narrative","to":"task:propaganda","weight":0.44},
+      {"from":"task:propaganda","to":"decision","weight":0.36}
+    ]
+  }
+}
+```
+
+---
+
+# ⚡ 4. Inference v2 — Single-Pass Architecture
+
+## 4.1 Current Limitation
+
+Sequential pipeline:
+
+```
+model → analyzers → aggregation
+```
+
+* High latency
+* Redundant compute
+
+---
+
+## 4.2 Target
+
+```id="infer_flow"
+Model (encoder + interaction + fusion)
+        ↓
+Final Outputs (single forward pass)
+        ↘ optional analyzers (async / fallback)
+```
+
+---
+
+## 4.3 Forward Pass Contract
+
+```python id="fwd"
+outputs = model(input_ids, attention_mask)
+
+return {
+  "task_outputs": {...},
+  "latent_vector": Z,
+  "credibility_score": score,
+  "risk": risk_logits,
+  "explanations": {
+    "cross_task": ...,
+    "global_shap": ...,
+    "attention_graph": ...
+  }
+}
+```
+
+---
+
+## 4.4 Optional Analyzer Mode
+
+* Run analyzers:
+
+  * **async**
+  * **on-demand (UI toggle)**
+* Do NOT block primary response
+
+---
+
+## 4.5 Latency Targets
+
+| Component        | Target         |
+| ---------------- | -------------- |
+| Model forward    | < 500 ms (GPU) |
+| Aggregator       | < 10 ms        |
+| SHAP (cached)    | < 50 ms        |
+| Total `/predict` | < 1 s          |
+
+---
+
+# ⚠️ 5. Risk Management (CRITICAL)
+
+## 5.1 Negative Transfer
+
+### Problem
+
+Tasks degrade each other during joint learning.
+
+---
+
+### Fix A — Task Gating
+
+```python id="gating"
+H_i = H_i + σ(G_ij) ⊙ H_j
+```
+
+* Learn when to share vs isolate
+
+---
+
+### Fix B — Gradient Surgery (PCGrad)
+
+```python id="pcgrad"
+if dot(g_i, g_j) < 0:
+    g_i = g_i - proj(g_i onto g_j)
+```
+
+* Remove conflicting gradient components
+
+---
+
+### Fix C — Loss Reweighting
+
+* Uncertainty weighting or GradNorm
+
+---
+
+## 5.2 Overconfidence / Miscalibration
+
+* Apply temperature scaling per task
+* Calibrate final score (Platt / isotonic)
+
+---
+
+## 5.3 Explainability Drift
+
+* Lock SHAP background dataset
+* Version explainers with model checkpoints
+
+---
+
+# 🚀 6. Deliverables
+
+Implement:
+
+1. Cross-task attribution module
+2. Multi-head SHAP pipeline (aggregator-level)
+3. Attention graph builder
+4. Single-pass inference API
+5. Async analyzer execution (optional)
+6. PCGrad / gating integration
+
+---
+
+# 🔥 Final Principle
+
+> Explainability is not a layer on top.
+> It is a **trace of the model’s internal reasoning across tasks**.
+
+---
+
+# 🧠 Key Insight
+
+Old system:
+
+> “Why is this fake?” → per-task answers
+
+New system:
+
+> “How did signals interact to produce this decision?” → **causal reasoning graph**
+
+---

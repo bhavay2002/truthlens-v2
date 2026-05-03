@@ -62,6 +62,7 @@ from .curriculum import CurriculumScheduler, CurriculumConfig, CurriculumState
 from .hard_sample_miner import HardSampleMiner, HardSampleMinerConfig
 from .confidence_filter import ConfidenceFilter, ConfidenceFilterConfig
 from .dynamic_task_balancer import DynamicTaskWeightBalancer, DynamicTaskBalancerConfig
+from .pcgrad import PCGradOptimizer
 
 # Optuna-backed tuning is optional — import lazily.
 _LAZY = {
@@ -144,6 +145,8 @@ __all__ = [
     "ConfidenceFilterConfig",
     "DynamicTaskWeightBalancer",
     "DynamicTaskBalancerConfig",
+    # v2 — PCGrad optimizer
+    "PCGradOptimizer",
     # Tuning (lazy)
     "tune_task",
     "tune_all_tasks",

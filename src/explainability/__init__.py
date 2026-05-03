@@ -35,6 +35,18 @@ from src.explainability.explainability_pipeline import (
     explain_prediction_full,
     run_explainability_pipeline,
 )
+from src.explainability.cross_task_attribution import CrossTaskAttributor
+from src.explainability.aggregator_shap import (
+    AggregatorSHAP,
+    AggregatorSHAPResult,
+    FeatureImportance,
+)
+from src.explainability.attention_graph import (
+    AttentionGraph,
+    AttentionGraphBuilder,
+    GraphNode,
+    GraphEdge,
+)
 
 __all__ = [
     "ExplainabilityConfig",
@@ -47,4 +59,15 @@ __all__ = [
     "AggregatedExplanation",
     "ExplanationOutput",
     "TokenImportance",
+    # v2 — cross-task attribution
+    "CrossTaskAttributor",
+    # v2 — aggregator SHAP
+    "AggregatorSHAP",
+    "AggregatorSHAPResult",
+    "FeatureImportance",
+    # v2 — attention graph
+    "AttentionGraph",
+    "AttentionGraphBuilder",
+    "GraphNode",
+    "GraphEdge",
 ]

@@ -184,6 +184,24 @@ class ExplainabilityResult(BaseModel):
     CRIT-6 / CRIT-7: this is the *single* ExplainabilityResult schema.
     ``src.explainability.explainability_pipeline.ExplainabilityResult``
     re-exports this class. ``model_explainer.py`` has been removed.
+
+    Explainability v2 additions
+    ---------------------------
+    cross_task_influence : Dict[target_task, Dict[source_task, float]]
+        Normalised cross-task influence matrix from CrossTaskAttributor
+        (§1 of the v2 spec). Maps each target task to the relative
+        influence of every source task on its representation.
+
+    global_explanation : List[Dict]
+        Per-feature SHAP importance values for the NeuralAggregator's
+        47-dim input vector (§2 of the v2 spec). Each entry is a
+        serialised FeatureImportance with keys:
+        feature_name, feature_index, shap_value, head.
+
+    attention_graph : Dict
+        Serialised AttentionGraph (§3 of the v2 spec) with keys:
+        nodes (List), edges (List), metadata (Dict).
+        Captures the token→task→decision information flow.
     """
 
     # ``extra="ignore"`` so callers can pass extra orchestrator fields
@@ -214,3 +232,13 @@ class ExplainabilityResult(BaseModel):
     module_failures: List[str] = Field(default_factory=list)
 
     metadata: Optional[Dict[str, Any]] = None
+
+    # ── Explainability v2 fields ──────────────────────────────────────
+    # §1 Cross-task attribution
+    cross_task_influence: Optional[Dict[str, Dict[str, float]]] = None
+
+    # §2 Multi-head SHAP on NeuralAggregator (serialised FeatureImportance list)
+    global_explanation: Optional[List[Dict[str, Any]]] = None
+
+    # §3 Attention graph (serialised AttentionGraph)
+    attention_graph: Optional[Dict[str, Any]] = None
