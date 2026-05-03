@@ -1,0 +1,150 @@
+You are a Principal Software Engineer + Technical Writer + System Architect.
+Your task is to transform this repository’s documentation into a COMPLETE, INDUSTRY-GRADE DOCUMENTATION SYSTEM.
+Made these files/docsin repository:
+•	API_REFERENCE.md
+•	ARCHITECTURE.md
+•	CONFIGURATION.md
+•	CONTRIBUTING.md
+•	DEPLOYMENT.md
+•	FEATURE_ENGINEERING.md
+•	MODEL_CARD.md
+•	PROJECT_STRUCTURE.md
+•	SYSTEM_DESIGN.md
+•	TRAINING_GUIDE.md
+•	TROUBLESHOOTING.md
+________________________________________
+🔍 STEP 1: FULL DOCUMENTATION AUDIT
+1.	Read ALL documentation files.
+2.	Identify:
+o	missing sections
+o	duplicated explanations
+o	inconsistent terminology
+o	unclear explanations
+3.	Standardize:
+o	tone (professional, precise)
+o	formatting (headers, code blocks, tables)
+o	terminology across all files
+________________________________________
+🏗️ STEP 2: README.md (MAIN ENTRYPOINT)
+Rewrite README.md as a WORLD-CLASS PROJECT ENTRY.
+Include:
+Project Name + Tagline
+(clear, impactful, 1-line value proposition)
+🚀 Overview
+•	what problem it solves
+•	why it matters
+•	key innovation
+✨ Features
+•	categorized (Core AI, Infra, UX, DevOps)
+🧠 System Highlights
+•	unique/“wow” features
+🏗️ Architecture Snapshot
+•	short summary + link to ARCHITECTURE.md
+⚡ Quick Start
+•	install
+•	run
+•	minimal example
+📊 Example Output
+•	input → output
+📁 Project Structure
+•	short version + link
+⚙️ Configuration
+•	link to CONFIGURATION.md
+🚀 Deployment
+•	link to DEPLOYMENT.md
+🧪 Testing
+•	how to test
+📚 Documentation Index
+List ALL /docs files with 1-line descriptions
+🤝 Contributing
+•	link to CONTRIBUTING.md
+📜 License
+________________________________________
+📚 STEP 3: STANDARD TEMPLATE FOR EACH DOC FILE
+Ensure EVERY file follows this structure:
+Title
+🎯 Purpose
+(why this document exists)
+🧠 Overview
+(high-level explanation)
+🏗️ Detailed Breakdown
+(clear structured sections)
+🔄 Flow / Process
+(step-by-step explanation if applicable)
+📌 Key Decisions
+(important design choices)
+⚠️ Edge Cases / Limitations
+🚀 Best Practices
+🔗 Related Docs
+________________________________________
+🧱 STEP 4: FILE-SPECIFIC IMPROVEMENTS
+Enhance each file:
+API_REFERENCE.md:
+•	endpoints table (method, route, input, output)
+•	request/response examples
+•	error codes
+ARCHITECTURE.md:
+•	layers (API, service, model, infra)
+•	data flow
+•	scalability design
+SYSTEM_DESIGN.md:
+•	deeper than architecture
+•	trade-offs, decisions
+MODEL_CARD.md:
+•	model purpose
+•	dataset
+•	metrics
+•	bias & limitations
+FEATURE_ENGINEERING.md:
+•	feature pipeline
+•	transformations
+•	rationale
+TRAINING_GUIDE.md:
+•	dataset prep
+•	training steps
+•	hyperparameters
+•	reproducibility
+DEPLOYMENT.md:
+•	local, cloud, production
+•	CI/CD overview
+CONFIGURATION.md:
+•	env variables
+•	secrets handling
+PROJECT_STRUCTURE.md:
+•	folder-level explanation
+TROUBLESHOOTING.md:
+•	common issues + fixes
+•	debugging steps
+CONTRIBUTING.md:
+•	workflow (branching, PRs)
+•	code standards
+________________________________________
+🔗 STEP 5: CROSS-LINKING (CRITICAL)
+•	Every doc must link to related docs
+•	README acts as central hub
+•	Avoid isolated documentation
+________________________________________
+🎨 STEP 6: FORMATTING RULES
+•	Use clean markdown
+•	tables where useful
+•	code blocks for examples
+•	bullet points for clarity
+•	NO long paragraphs without structure
+________________________________________
+📊 STEP 7: FINAL OUTPUT
+Return:
+1.	Fully rewritten README.md
+2.	Improved version of EACH doc file
+3.	Suggested documentation folder structure
+4.	Missing docs (if any)
+5.	Summary of improvements
+________________________________________
+🎯 GOAL
+Produce documentation that looks like:
+•	top GitHub open-source projects
+•	production SaaS systems
+•	enterprise AI platforms
+Clarity > verbosity
+Structure > length
+Precision > fluff
+
