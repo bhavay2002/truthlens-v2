@@ -115,8 +115,6 @@ class FramingFeatures(BaseFeature):
         # GLOBAL METRICS
         # -------------------------
 
-        intensity = float(np.mean(list(raw.values())))
-
         probs = np.array(list(dist.values()), dtype=np.float32)
 
         entropy = normalized_entropy(probs)
@@ -130,16 +128,15 @@ class FramingFeatures(BaseFeature):
         # -------------------------
 
         return {
-            "frame_economic": self._safe(dist["economic"]),
-            "frame_moral": self._safe(dist["moral"]),
-            "frame_security": self._safe(dist["security"]),
-            "frame_human": self._safe(dist["human"]),
-            "frame_conflict": self._safe(dist["conflict"]),
+            "frame_economic_ratio": self._safe(dist["economic"]),
+            "frame_moral_ratio": self._safe(dist["moral"]),
+            "frame_security_ratio": self._safe(dist["security"]),
+            "frame_human_interest_ratio": self._safe(dist["human"]),
+            "frame_conflict_ratio": self._safe(dist["conflict"]),
 
-            "frame_phrase_score": self._safe(phrase_score),
+            "frame_phrase_count": self._safe(phrase_score),
             "frame_quote_density": self._safe(quote_density),
 
-            "frame_intensity": self._safe(intensity),
             "frame_diversity": self._safe(diversity),
             "frame_entropy": self._safe(entropy),
             "frame_dominance": self._safe(dominance),

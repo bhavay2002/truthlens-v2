@@ -10,7 +10,7 @@ from src.features.base.base_feature import BaseFeature, FeatureContext
 from src.features.base.feature_registry import register_feature
 from src.features.base.lexicon_loader import load_lexicon_set
 from src.features.base.lexicon_matcher import LexiconMatcher, to_token_array
-from src.features.base.numerics import EPS, MAX_CLIP, normalized_entropy
+from src.features.base.numerics import EPS, MAX_CLIP
 from src.features.base.text_signals import get_text_signals
 from src.features.base.tokenization import ensure_tokens_word
 
@@ -99,14 +99,6 @@ class ConflictFeatures(BaseFeature):
         intensity = float(np.linalg.norm(values))
 
         # -------------------------
-        # ENTROPY
-        # -------------------------
-
-        probs = np.array(list(dist.values()), dtype=np.float32)
-
-        entropy = normalized_entropy(probs)
-
-        # -------------------------
         # DIVERSITY (weighted)
         # -------------------------
 
@@ -126,15 +118,14 @@ class ConflictFeatures(BaseFeature):
         # -------------------------
 
         return {
-            "conflict_confrontation": self._safe(dist["confrontation"]),
-            "conflict_dispute": self._safe(dist["dispute"]),
-            "conflict_accusation": self._safe(dist["accusation"]),
-            "conflict_aggression": self._safe(dist["aggression"]),
-            "conflict_polarization": self._safe(dist["polarization"]),
-            "conflict_escalation": self._safe(dist["escalation"]),
+            "conflict_confrontation_ratio": self._safe(dist["confrontation"]),
+            "conflict_dispute_ratio": self._safe(dist["dispute"]),
+            "conflict_accusation_ratio": self._safe(dist["accusation"]),
+            "conflict_aggression_ratio": self._safe(dist["aggression"]),
+            "conflict_polarization_ratio": self._safe(dist["polarization"]),
+            "conflict_escalation_ratio": self._safe(dist["escalation"]),
 
             "conflict_intensity": self._safe(intensity),
-            "conflict_entropy": self._safe(entropy),
             "conflict_diversity": self._safe(diversity),
 
             "conflict_rhetoric_score": self._safe(rhetoric),

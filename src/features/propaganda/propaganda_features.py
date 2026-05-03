@@ -13,7 +13,7 @@ from src.features.base.base_feature import BaseFeature, FeatureContext
 from src.features.base.feature_registry import register_feature
 from src.features.base.lexicon_loader import load_lexicon_set
 from src.features.base.lexicon_matcher import LexiconMatcher, to_token_array
-from src.features.base.numerics import EPS, MAX_CLIP, normalized_entropy
+from src.features.base.numerics import EPS, MAX_CLIP
 from src.features.base.text_signals import get_text_signals
 from src.features.base.tokenization import ensure_tokens_word
 
@@ -104,19 +104,11 @@ class PropagandaFeatures(BaseFeature):
             norm = values / (total + EPS)
             dist = dict(zip(raw.keys(), norm.astype(float)))
 
-        probs = np.array(list(dist.values()), dtype=np.float32)
-
         # -------------------------
         # INTENSITY
         # -------------------------
 
         intensity = float(np.linalg.norm(values))
-
-        # -------------------------
-        # ENTROPY
-        # -------------------------
-
-        entropy = normalized_entropy(probs)
 
         # -------------------------
         # DIVERSITY
@@ -134,29 +126,24 @@ class PropagandaFeatures(BaseFeature):
 
         signals = get_text_signals(context, n)
         caps_ratio = signals["caps_ratio"]
-        # ``rhetoric`` historically aggregated ! and ? — keep that
-        # composite, but BOTH components now come from the shared,
-        # headline-weighted, NER-aware path.
-        rhetoric = signals["exclamation_density"] + signals["question_density"]
 
         # -------------------------
         # OUTPUT
         # -------------------------
 
         return {
-            "propaganda_name_calling": self._safe(dist["name_calling"]),
-            "propaganda_fear": self._safe(dist["fear"]),
-            "propaganda_exaggeration": self._safe(dist["exaggeration"]),
-            "propaganda_glitter": self._safe(dist["glitter"]),
-            "propaganda_us_vs_them": self._safe(dist["us_vs_them"]),
-            "propaganda_authority": self._safe(dist["authority"]),
-            "propaganda_intensifier": self._safe(dist["intensifier"]),
+            "propaganda_name_calling_ratio": self._safe(dist["name_calling"]),
+            "propaganda_fear_ratio": self._safe(dist["fear"]),
+            "propaganda_exaggeration_ratio": self._safe(dist["exaggeration"]),
+            "propaganda_glitter_ratio": self._safe(dist["glitter"]),
+            "propaganda_us_vs_them_ratio": self._safe(dist["us_vs_them"]),
+            "propaganda_authority_ratio": self._safe(dist["authority"]),
+            "propaganda_intensifier_ratio": self._safe(dist["intensifier"]),
 
             "propaganda_intensity": self._safe(intensity),
-            "propaganda_entropy": self._safe(entropy),
             "propaganda_diversity": self._safe(diversity),
 
-            "propaganda_rhetoric": self._safe(rhetoric),
+            "propaganda_exclamation_density": self._safe(signals["exclamation_density"]),
             "propaganda_caps_ratio": self._safe(caps_ratio),
         }
 

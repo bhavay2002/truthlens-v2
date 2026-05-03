@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Optional
 
 from src.explainability.orchestrator import (
     ExplainabilityConfig,
-    ExplainabilityOrchestrator,
+    get_default_orchestrator,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def explain_prediction_full(
         cache_enabled=True,              # 🔥 upgraded
     )
 
-    orchestrator = ExplainabilityOrchestrator(config=config)
+    orchestrator = get_default_orchestrator(config)
 
     prediction = predict_fn(text)
 
@@ -74,8 +74,8 @@ def explain_prediction_full(
         # 🔥 NEW unified outputs
         # -------------------------
         "aggregated_explanation": result.get("aggregated_explanation"),
-        "metrics": result.get("metrics"),
-        "consistency": result.get("consistency"),
+        "metrics": result.get("explanation_metrics"),
+        "consistency": result.get("consistency_metrics"),
 
         # -------------------------
         # 🔥 metadata
@@ -117,7 +117,7 @@ def explain_fast(
         cache_enabled=True,  # 🔥 keep cache
     )
 
-    orchestrator = ExplainabilityOrchestrator(config=config)
+    orchestrator = get_default_orchestrator(config)
 
     try:
         result = orchestrator.explain_fast(

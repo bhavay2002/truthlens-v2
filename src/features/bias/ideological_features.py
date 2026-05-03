@@ -123,8 +123,6 @@ class IdeologicalFeatures(BaseFeature):
         # GLOBAL SIGNALS
         # -------------------------
 
-        intensity = float(np.mean(list(raw.values())))
-
         signal_strength = (
             (raw["left"] + raw["right"]) * 0.6 +
             polarization * 0.4
@@ -135,18 +133,17 @@ class IdeologicalFeatures(BaseFeature):
         # -------------------------
 
         return {
-            "ideology_left": self._safe(dist["left"]),
-            "ideology_right": self._safe(dist["right"]),
+            "ideology_left_ratio": self._safe(dist["left"]),
+            "ideology_right_ratio": self._safe(dist["right"]),
 
             "ideology_balance": self._safe(balance),
             "ideology_entropy": self._safe(entropy),
 
-            "ideology_polarization": self._safe(polarization),
-            "ideology_group_reference": self._safe(group_ref),
+            "ideology_polarization_ratio": self._safe(polarization),
+            "ideology_group_reference_ratio": self._safe(group_ref),
 
-            "ideology_phrase_score": self._safe(phrase_score),
+            "ideology_phrase_count": self._safe(phrase_score),
 
-            "ideology_intensity": self._safe(intensity),
             "ideology_signal_strength": self._safe(signal_strength),
         }
 

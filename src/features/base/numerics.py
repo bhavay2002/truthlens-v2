@@ -36,8 +36,6 @@ from typing import Sequence, Union
 
 import numpy as np
 
-EPS = 1e-8
-
 
 def normalized_entropy(
     probs: Union[Sequence[float], np.ndarray],
